@@ -1,0 +1,21 @@
+# requirements.txt
+# Traffic Analysis Pipeline — CPU-only, Windows-compatible
+# Install with: pip install -r requirements.txt
+
+# Core computer vision and numerical computation
+opencv-python==4.8.1.78
+numpy>=1.24.0,<2.0
+
+# YOLOv8 — installs torch (CPU), torchvision, and ultralytics automatically
+# The nano model (yolov8n.pt) will be auto-downloaded on first run
+ultralytics>=8.0.0,<9.0
+
+# PyTorch CPU-only build (avoids downloading CUDA packages)
+# Run this FIRST before pip install -r requirements.txt:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
+torchvision>=0.15.0
+
+
+
+
