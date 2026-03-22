@@ -51,10 +51,21 @@ PREPROCESS_CONFIG = {
 # Divide the 640px-wide frame into 4 equal vertical lanes
 # Format: {"lane_name": (x1, y1, x2, y2)}
 CUSTOM_LANE_CONFIG = {
-    "lane_1": [(0, 215), (210, 215), (185, 480), (0, 480)],
-    "lane_2": [(210, 180), (395, 180), (360, 480), (185, 480)],
-    "lane_3": [(395, 140), (560, 140), (525, 480), (360, 480)],
-    "lane_4": [(560, 140), (640, 140), (640, 480), (525, 480)],
+    "left_road": [
+        (0, 240), (240, 180), (220, 480), (0, 480)
+    ],
+
+    "bottom_road": [
+        (180, 280), (460, 280), (460, 480), (180, 480)
+    ],
+
+    "right_road": [
+        (420, 200), (640, 160), (640, 480), (420, 480)
+    ],
+
+    "top_road": [
+        (180, 0), (460, 0), (460, 260), (240, 180)
+    ],
 }
 # ── Detector overrides ───────────────────────
 CUSTOM_DETECTOR_CONFIG = {
@@ -67,7 +78,7 @@ CUSTOM_TRACKER_CONFIG = {
     **TRACKER_CONFIG,
     "max_distance":    80,               # Max pixels to match same vehicle
     "max_lost_frames": 10,               # Frames before track is dropped
-    "min_hits":        2,                # Min frames to confirm a vehicle
+    "min_hits":       1,# 2,                # Min frames to confirm a vehicle
 }
 
 
@@ -93,8 +104,9 @@ class PipelineSummary:
             self.lane_totals[lane] = self.lane_totals.get(lane, 0) + count
 
         # Track emergency events
-        if frame_output["emergency_lane"]:
-            self.emergency_frames.append(frame_output["frame_id"])
+        if frame_output.get("emergency_lanes"):
+            if frame_output["frame_id"] not in self.emergency_frames:
+                self.emergency_frames.append(frame_output["frame_id"])
 
         # Accumulate direction counts
         for v in frame_output["vehicles"]:

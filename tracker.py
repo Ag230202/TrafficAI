@@ -24,7 +24,7 @@ TRACKER_CONFIG = {
     "max_lost_frames": 10,
 
     # Minimum number of frames a track must be seen to be considered stable
-    "min_hits": 2,
+    "min_hits":1,# 2,
 }
 
 
