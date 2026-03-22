@@ -8,6 +8,7 @@ Responsibilities:
   - Assign each vehicle to the correct lane using bounding box center
   - Count vehicles per lane
   - Flag lanes containing emergency vehicles
+  - Return IDs of specific vehicles that triggered emergency flag
 """
 
 import cv2
@@ -18,15 +19,12 @@ LANE_CONFIG = {
     "left_road": [
         (0, 250), (200, 200), (200, 480), (0, 480)
     ],
-
     "bottom_road": [
         (200, 300), (450, 300), (450, 480), (200, 480)
     ],
-
     "right_road": [
         (450, 250), (640, 200), (640, 480), (450, 480)
     ],
-
     "top_road": [
         (200, 0), (450, 0), (450, 250), (200, 250)
     ],
@@ -34,7 +32,7 @@ LANE_CONFIG = {
 
 EMERGENCY_CLASSES = {"ambulance", "fire truck", "firetruck", "fire_truck"}
 EMERGENCY_BBOX_AREA_THRESHOLD = 18000
-EMERGENCY_SPEED_THRESHOLD = 25
+EMERGENCY_SPEED_THRESHOLD = 10
 
 
 class LaneMapper:
@@ -45,7 +43,6 @@ class LaneMapper:
         x1, y1, x2, y2 = bbox
         cx = (x1 + x2) // 2
         cy = (y1 + y2) // 2
-
         point = (cx, cy)
 
         for lane_name, polygon in self.lanes.items():
@@ -54,54 +51,80 @@ class LaneMapper:
             if inside >= 0:
                 return lane_name
 
-        # fallback: assign nearest lane (based on x position)
+        # fallback: assign by x position
         cx = (bbox[0] + bbox[2]) // 2
-
-        if cx < 160:
-            return "left_road"
-        elif cx < 320:
-            return "bottom_road"
-        elif cx < 480:
-            return "right_road"
-        else:
-            return "top_road"
+        if cx < 160:   return "left_road"
+        elif cx < 320: return "bottom_road"
+        elif cx < 480: return "right_road"
+        else:          return "top_road"
 
     def count_vehicles_per_lane(self, vehicle_list: list) -> dict:
         counts = {lane: 0 for lane in self.lanes}
-
-
         for vehicle in vehicle_list:
             lane = vehicle.get("lane", "unknown")
             if lane in counts:
                 counts[lane] += 1
             else:
-                counts["unknown"] += 1
-
+                counts["unknown"] = counts.get("unknown", 0) + 1
         return counts
 
-    def detect_emergency_lanes(self, vehicle_list: list) -> list:
-        emergency_lanes = []
+    def detect_emergency_lanes(self, vehicle_list: list) -> tuple:
+        """
+        Returns (emergency_lanes, emergency_vehicle_ids).
+
+        emergency_lanes:       list of lane name strings
+        emergency_vehicle_ids: set of vehicle IDs that directly
+                               triggered the emergency flag — NOT all
+                               vehicles in those lanes, only the specific
+                               truck/bus that passed the heuristic check.
+        """
+        emergency_lanes      = []
+        emergency_vehicle_ids = set()
 
         for vehicle in vehicle_list:
-            cls = vehicle.get("class", "").lower()
-            bbox = vehicle.get("bbox", [0, 0, 0, 0])
-            lane = vehicle.get("lane", "unknown")
+            cls   = vehicle.get("class", "").lower()
+            bbox  = vehicle.get("bbox", [0, 0, 0, 0])
+            lane  = vehicle.get("lane", "unknown")
+            vid   = vehicle.get("id")
 
+            # Class-name check — works once model is fine-tuned on ambulance
             if cls in EMERGENCY_CLASSES:
-                emergency_lanes.append(lane)
+                if lane not in emergency_lanes:
+                    emergency_lanes.append(lane)
+                if vid is not None:
+                    emergency_vehicle_ids.add(vid)
                 continue
 
             if cls in {"truck", "bus"}:
-                area = self._bbox_area(bbox)
-                if area > 20000:
-                    emergency_lanes.append(lane)
-                    continue
+                prev = vehicle.get("prev_centroid")
+                triggered = False
 
-        return list(set(emergency_lanes))
+                if prev is None:
+                    # First frame — flag by area alone
+                    if self._bbox_area(bbox) >= EMERGENCY_BBOX_AREA_THRESHOLD:
+                        triggered = True
+                else:
+                    # Has motion history — use full area + speed check
+                    if self._is_emergency_heuristic(bbox, vehicle):
+                        triggered = True
+
+                if triggered:
+                    if lane not in emergency_lanes:
+                        emergency_lanes.append(lane)
+                    if vid is not None:
+                        emergency_vehicle_ids.add(vid)
+
+        return emergency_lanes, emergency_vehicle_ids
+
     def analyse(self, vehicle_list: list) -> tuple:
+        """
+        Returns (lane_counts, emergency_lanes, emergency_vehicle_ids).
+        Previously returned (lane_counts, emergency_lanes) — now includes
+        emergency_vehicle_ids so pipeline can track the specific vehicles.
+        """
         lane_counts = self.count_vehicles_per_lane(vehicle_list)
-        emergency_lanes = self.detect_emergency_lanes(vehicle_list)
-        return lane_counts, emergency_lanes
+        emergency_lanes, emergency_vehicle_ids = self.detect_emergency_lanes(vehicle_list)
+        return lane_counts, emergency_lanes, emergency_vehicle_ids
 
     def get_lane_boundaries(self) -> dict:
         return dict(self.lanes)
@@ -122,6 +145,6 @@ class LaneMapper:
         return (dx**2 + dy**2) ** 0.5
 
     def _is_emergency_heuristic(self, bbox: list, vehicle: dict) -> bool:
-        area = self._bbox_area(bbox)
+        area  = self._bbox_area(bbox)
         speed = self._centroid_speed(vehicle)
         return area >= EMERGENCY_BBOX_AREA_THRESHOLD and speed >= EMERGENCY_SPEED_THRESHOLD
