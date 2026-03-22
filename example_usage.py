@@ -35,21 +35,27 @@ PREPROCESS_CONFIG = {
     "resize_height": 480,
     "frame_skip":    3,                  # Process every 3rd frame
 
-    # Road ROI — adjust to match your camera angle
-    # Format: list of (x1, y1, x2, y2) rectangles
-    "rois": [
-        (0, 120, 640, 480),              # Crop out sky/horizon above y=120
-    ],
+    # FIX 3: ROI disabled for top-down intersection camera — the whole
+    # frame is road. Previous ROI (y=120) was cutting police cars,
+    # ambulance, and background vehicles from detection entirely.
+    "rois": [],
 
-    "alpha": 1.2,                        # Contrast boost
-    "beta":  15,                         # Brightness boost
+    "alpha": 1.2,                        # Contrast boost (used when use_clahe=False)
+    "beta":  15,                         # Brightness boost (used when use_clahe=False)
     "blur_kernel": (3, 3),               # Mild noise reduction
+
+    # FIX 1: CLAHE enabled for night-time / mixed lighting footage.
+    # Unlike alpha/beta (global transform), CLAHE equalises contrast
+    # locally per tile — handles blown-out emergency lights AND dark road
+    # areas simultaneously. Set to False for daytime footage.
+    "use_clahe":        True,
+    "clahe_clip_limit": 2.0,             # Higher = more contrast, more noise risk
+    "clahe_tile_grid":  (8, 8),          # Tile size for 640x480 frames
+
     "use_background_subtraction": False, # Toggle MOG2 background subtraction
 }
 
 # ── Lane boundaries ──────────────────────────
-# Divide the 640px-wide frame into 4 equal vertical lanes
-# Format: {"lane_name": (x1, y1, x2, y2)}
 CUSTOM_LANE_CONFIG = {
     "left_road": [
         (0, 240), (240, 180), (220, 480), (0, 480)
@@ -67,10 +73,20 @@ CUSTOM_LANE_CONFIG = {
         (180, 0), (460, 0), (460, 260), (240, 180)
     ],
 }
+
 # ── Detector overrides ───────────────────────
 CUSTOM_DETECTOR_CONFIG = {
     **DETECTOR_CONFIG,
-    "confidence_threshold": 0.25,         # Lower = more detections, more noise
+    "confidence_threshold": 0.15,        # FIX 1: lowered from 0.25 — night footage
+                                         # drops confidence significantly; 0.15 catches
+                                         # fire trucks, police cars, distant vehicles
+                                         # that were previously filtered out.
+
+    # FIX 2: increased from 640 to 1280 for overhead/top-down camera.
+    # At 640, vehicles in the upper half of the frame are ~20-40px wide
+    # and fall between YOLO grid cells. 1280 doubles grid density, allowing
+    # detection of vehicles half the size. ~2x slower but essential here.
+    "imgsz": 1280,
 }
 
 # ── Tracker overrides ────────────────────────
@@ -78,7 +94,7 @@ CUSTOM_TRACKER_CONFIG = {
     **TRACKER_CONFIG,
     "max_distance":    80,               # Max pixels to match same vehicle
     "max_lost_frames": 10,               # Frames before track is dropped
-    "min_hits":       1,# 2,                # Min frames to confirm a vehicle
+    "min_hits":        1,                # Min frames to confirm a vehicle
 }
 
 
@@ -89,11 +105,17 @@ class PipelineSummary:
     """Tracks aggregate stats across all frames without storing raw data."""
 
     def __init__(self):
-        self.total_frames     = 0
-        self.total_vehicles   = 0
-        self.emergency_frames = []         # frame_ids with emergency vehicles
-        self.lane_totals      = {}         # cumulative vehicle counts per lane
-        self.direction_counts = {}         # direction → count
+        self.total_frames          = 0
+        self.total_vehicles        = 0
+        self.emergency_frames      = []   # frame_ids where emergency detected
+        self.lane_totals           = {}   # cumulative vehicle counts per lane
+        self.direction_counts      = {}   # direction → count
+
+        # Emergency vehicle tracking
+        self.total_emergency_detections = 0          # total emergency flags across all frames
+        self.emergency_lane_counts      = {}         # lane → how many frames had emergency there
+        self.max_emergency_per_frame    = 0          # peak simultaneous emergency lane count
+        self.emergency_vehicle_ids      = set()      # unique track IDs flagged as emergency
 
     def update(self, frame_output: dict):
         self.total_frames   += 1
@@ -103,31 +125,75 @@ class PipelineSummary:
         for lane, count in frame_output["lane_counts"].items():
             self.lane_totals[lane] = self.lane_totals.get(lane, 0) + count
 
-        # Track emergency events
-        if frame_output.get("emergency_lanes"):
-            if frame_output["frame_id"] not in self.emergency_frames:
-                self.emergency_frames.append(frame_output["frame_id"])
-
         # Accumulate direction counts
         for v in frame_output["vehicles"]:
             d = v.get("direction", "unknown")
             self.direction_counts[d] = self.direction_counts.get(d, 0) + 1
 
+        # ── Emergency vehicle tracking ───────────────────────────
+        emerg_lanes = frame_output.get("emergency_lane", [])
+
+        if emerg_lanes:
+            fid = frame_output["frame_id"]
+
+            # Record frame ID (deduplicated)
+            if fid not in self.emergency_frames:
+                self.emergency_frames.append(fid)
+
+            # Count detections this frame
+            self.total_emergency_detections += len(emerg_lanes)
+
+            # Track which lanes had emergency vehicles and how often
+            for lane in emerg_lanes:
+                self.emergency_lane_counts[lane] = (
+                    self.emergency_lane_counts.get(lane, 0) + 1
+                )
+
+            # Track peak simultaneous emergency lanes
+            self.max_emergency_per_frame = max(
+                self.max_emergency_per_frame, len(emerg_lanes)
+            )
+
+            # Track unique vehicle IDs that were in emergency lanes
+            # Use the specific IDs that triggered the emergency flag
+            # (not all vehicles in the lane — those are just bystanders)
+            for vid in frame_output.get("emergency_veh_ids", set()):
+                self.emergency_vehicle_ids.add(vid)
+
     def print_summary(self):
         print("\n" + "═" * 55)
         print("  PIPELINE SUMMARY")
         print("═" * 55)
-        print(f"  Frames processed   : {self.total_frames}")
-        print(f"  Total vehicle obs  : {self.total_vehicles}")
-        print(f"  Emergency events   : {len(self.emergency_frames)}")
-        if self.emergency_frames:
-            print(f"  Emergency frame IDs: {self.emergency_frames}")
+        print(f"  Frames processed        : {self.total_frames}")
+        print(f"  Total vehicle obs       : {self.total_vehicles}")
         print()
+
+        # ── Emergency section ────────────────────────────────────
+        print(f"  Emergency events")
+        print(f"  ├─ Frames with emergency : {len(self.emergency_frames)}")
+        if self.emergency_frames:
+            print(f"  ├─ Frame IDs             : {self.emergency_frames}")
+        print(f"  ├─ Total detections      : {self.total_emergency_detections}")
+        print(f"  ├─ Peak lanes at once    : {self.max_emergency_per_frame}")
+        id_str = f"  {sorted(self.emergency_vehicle_ids)}" if self.emergency_vehicle_ids else "  none"
+        print(f"  └─ Emergency vehicle IDs : {len(self.emergency_vehicle_ids)}{id_str}")
+        if self.emergency_lane_counts:
+            print()
+            print("  Emergency lane breakdown:")
+            for lane, count in sorted(self.emergency_lane_counts.items(),
+                                      key=lambda x: -x[1]):
+                bar = "█" * min(count, 30)
+                print(f"    {lane:<12} {count:>4} frames  {bar}")
+        print()
+
+        # ── Lane counts ──────────────────────────────────────────
         print("  Cumulative lane counts:")
         for lane, count in sorted(self.lane_totals.items()):
             bar = "█" * min(count, 40)
             print(f"    {lane:<10} {count:>5}  {bar}")
         print()
+
+        # ── Directions ───────────────────────────────────────────
         print("  Vehicle directions:")
         for direction, count in sorted(self.direction_counts.items(),
                                        key=lambda x: -x[1]):
@@ -152,7 +218,7 @@ def main():
 
     summary = PipelineSummary()
 
-    # ── Run pipeline ────────────────────────────────────────────
+    # ── Run pipeline ─────────────────────────────────────────────
     # run_pipeline is a generator — frames are never stored in bulk
     for frame_output in run_pipeline(
         frames_folder=FRAMES_FOLDER,
@@ -161,10 +227,7 @@ def main():
         tracker_config=CUSTOM_TRACKER_CONFIG,
         lane_config=CUSTOM_LANE_CONFIG,
     ):
-        # Update running summary
-        summary.update(frame_output)
-
-        # 🔽 ADD HERE
+        # ── Display debug frame ──────────────────────────────────
         debug_frame = frame_output.get("debug_frame")
 
         if debug_frame is not None:
@@ -173,94 +236,42 @@ def main():
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
-            # ── Per-frame output ────────────────────────────────────
-            fid          = frame_output["frame_id"]
-            lane_counts  = frame_output["lane_counts"]
-            vehicles     = frame_output["vehicles"]
-            emerg_lane   = frame_output["emergency_lane"]
 
-            # Print concise one-line summary per frame
-            veh_count = len(vehicles)
-            emerg_str = f"  ⚠ EMERGENCY → {emerg_lane}" if emerg_lane else ""
-            print(f"Frame {fid:>5} | Vehicles: {veh_count:>3} | Lanes: {lane_counts}{emerg_str}")
+        # ── Per-frame console output ─────────────────────────────
+        # FIX C: these lines were inside the "if debug_frame" block —
+        # they now run every frame regardless of debug_frame availability.
+        fid         = frame_output["frame_id"]
+        lane_counts = frame_output["lane_counts"]
+        vehicles    = frame_output["vehicles"]
+        emerg_lane  = frame_output["emergency_lane"]  # correct key name
 
-            # Optionally print full vehicle details (comment out for cleaner output)
-            if vehicles:
-                for v in vehicles:
-                    print(
-                        f"         ID:{v['id']:>3}  {v['class']:<12} "
-                        f"conf:{v['confidence']:.2f}  lane:{v['lane']}  "
-                        f"dir:{v['direction']}  bbox:{v['bbox']}"
-                    )
+        veh_count   = len(vehicles)
+        # Show the specific vehicle IDs that triggered the emergency flag
+        emerg_ids  = frame_output.get("emergency_veh_ids", set())
+        emerg_str  = (
+            f"  ⚠ EMERGENCY → {emerg_lane}  ({len(emerg_ids)} emergency vehicle(s): IDs {sorted(emerg_ids)})"
+            if emerg_lane else ""
+        )
+        print(f"Frame {fid:>5} | Vehicles: {veh_count:>3} | Lanes: {lane_counts}{emerg_str}")
 
-            # Update running summary
-            summary.update(frame_output)
+        # Optionally print full vehicle details (comment out for cleaner output)
+        if vehicles:
+            for v in vehicles:
+                print(
+                    f"         ID:{v['id']:>3}  {v['class']:<12} "
+                    f"conf:{v['confidence']:.2f}  lane:{v['lane']}  "
+                    f"dir:{v['direction']}  bbox:{v['bbox']}"
+                )
 
-            # ── Final summary ────────────────────────────────────────────
-            summary.print_summary()
+        # FIX A: single update call at bottom of loop — was called twice before
+        # (once at the very top of the loop, once inside the if block)
+        summary.update(frame_output)
 
-
-# ─────────────────────────────────────────────
-#  STANDALONE DEMO (no real frames needed)
-# ─────────────────────────────────────────────
-# def demo_with_mock_output():
-#     """
-#     Shows what the per-frame output structure looks like
-#     without needing a real frames folder or YOLO model.
-#     """
-#     sample_output = {
-#         "frame_id": 12,
-#         "lane_counts": {
-#             "lane_1": 1,
-#             "lane_2": 2,
-#             "lane_3": 0,
-#             "lane_4": 1,
-#         },
-#         "vehicles": [
-#             {
-#                 "id": 0,
-#                 "lane": "lane_1",
-#                 "bbox": [10, 200, 150, 350],
-#                 "class": "car",
-#                 "confidence": 0.87,
-#                 "direction": "down",
-#             },
-#             {
-#                 "id": 1,
-#                 "lane": "lane_2",
-#                 "bbox": [170, 180, 310, 400],
-#                 "class": "bus",
-#                 "confidence": 0.91,
-#                 "direction": "stationary",
-#             },
-#             {
-#                 "id": 2,
-#                 "lane": "lane_2",
-#                 "bbox": [200, 220, 290, 360],
-#                 "class": "motorcycle",
-#                 "confidence": 0.65,
-#                 "direction": "down",
-#             },
-#             {
-#                 "id": 3,
-#                 "lane": "lane_4",
-#                 "bbox": [490, 150, 630, 420],
-#                 "class": "truck",
-#                 "confidence": 0.78,
-#                 "direction": "up",
-#             },
-#         ],
-#         "emergency_lane": None,
-#     }
-
-#     print("\n── Sample Frame Output Structure ──────────────────")
-#     print(json.dumps(sample_output, indent=2))
-#     print("───────────────────────────────────────────────────\n")
+    # FIX B: print_summary() is now OUTSIDE the loop — prints once at the end.
+    # Was inside the loop AND inside the if block — printed after every single frame.
+    summary.print_summary()
+    cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
-    # Show the expected output structure first
-    #demo_with_mock_output()
-
-    # Then run the real pipeline (requires FRAMES_FOLDER to exist)
     main()
