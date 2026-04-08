@@ -26,7 +26,7 @@ from lane_mapper import LANE_CONFIG
 # ─────────────────────────────────────────────
 
 # Path to your folder of extracted video frames (JPG/PNG files)
-FRAMES_FOLDER = r"C:\Users\ANIMESH GARTIA\Downloads\Traffic_Footage_Demo"   # ← Change this path
+FRAMES_FOLDER = r"D:\Downloads\frames"   # ← Change this path
 
 # ── Preprocessing overrides ─────────────────
 PREPROCESS_CONFIG = {
