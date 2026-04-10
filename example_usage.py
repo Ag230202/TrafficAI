@@ -1,34 +1,55 @@
 """
 example_usage.py
-----------------
-Demonstrates how to run the full traffic analysis pipeline.
+----------------------------
+Entrypoint for running the full integrated pipeline with both Phase 1 (traffic analysis) and Phase 2 (signal control). This script processes video frames, detects vehicles,
+tracks them, maps them to lanes, detects collisions, and uses that information to control traffic signals in a simulated environment.
 
 Steps:
   1. Configure paths and parameters
-  2. Run the pipeline (generator — no bulk memory allocation)
-  3. Print per-frame structured output
-  4. Summarise results after all frames are processed
+  2. Initialize Phase 1 pipeline + Phase 2 signal controller
+  3. Process frames: detect → track → signal control → log/display
+  4. Print summaries for both traffic analysis and signal timing
 
 Run:
-    python example_usage.py
+    python example_usage_integrated.py
+
+Dependencies:
+  - Phase 1: existing pipeline.py, detector.py, etc.
+  - Phase 2: signal_controller.py, signal_logger.py
 """
+
 import cv2
 import os
 import json
+import numpy as np
 from pipeline import run_pipeline
 from preprocessing import CONFIG as DEFAULT_PREPROCESS_CONFIG
 from detector import DETECTOR_CONFIG
 from tracker import TRACKER_CONFIG
 from lane_mapper import LANE_CONFIG
 
-# ─────────────────────────────────────────────
+# ── Phase 2 imports ──────────────────────────────────────────────
+from signal_controller import SignalController, SIGNAL_CONFIG
+from signal_logger import SignalLogger
+
+
+# ═════════════════════════════════════════════════════════════════
 #  1. USER CONFIGURATION — edit these
-# ─────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════
 
 # Path to your folder of extracted video frames (JPG/PNG files)
-FRAMES_FOLDER = r"C:\Users\ANIMESH GARTIA\Downloads\Traffic_Footage_Demo"   # ← Change this path
+FRAMES_FOLDER = r"D:\Downloads\CrashFrame"   # ← Change this path
 
-# ── Preprocessing overrides ─────────────────
+# Path for the collision log file (set to None to disable file logging)
+COLLISION_LOG_FILE = None  # Logging to terminal only
+
+# Path for the signal log file
+SIGNAL_LOG_FILE = "signal_log.txt"
+
+# Enable/disable Phase 2 signal controller
+ENABLE_SIGNAL_CONTROLLER = True
+
+# ─ Preprocessing overrides ──────────────────────────────────────
 PREPROCESS_CONFIG = {
     **DEFAULT_PREPROCESS_CONFIG,         # Start from defaults
     "resize_width":  640,
@@ -55,7 +76,7 @@ PREPROCESS_CONFIG = {
     "use_background_subtraction": False, # Toggle MOG2 background subtraction
 }
 
-# ── Lane boundaries ──────────────────────────
+# ─ Lane boundaries ───────────────────────────────────────────────
 CUSTOM_LANE_CONFIG = {
     "left_road": [
         (0, 240), (240, 180), (220, 480), (0, 480)
@@ -74,7 +95,7 @@ CUSTOM_LANE_CONFIG = {
     ],
 }
 
-# ── Detector overrides ───────────────────────
+# ─ Detector overrides ────────────────────────────────────────────
 CUSTOM_DETECTOR_CONFIG = {
     **DETECTOR_CONFIG,
     "confidence_threshold": 0.15,        # FIX 1: lowered from 0.25 — night footage
@@ -89,7 +110,7 @@ CUSTOM_DETECTOR_CONFIG = {
     "imgsz": 1280,
 }
 
-# ── Tracker overrides ────────────────────────
+# ─ Tracker overrides ─────────────────────────────────────────────
 CUSTOM_TRACKER_CONFIG = {
     **TRACKER_CONFIG,
     "max_distance":    80,               # Max pixels to match same vehicle
@@ -97,10 +118,39 @@ CUSTOM_TRACKER_CONFIG = {
     "min_hits":        1,                # Min frames to confirm a vehicle
 }
 
+# ─ Signal controller overrides (Phase 2) ────────────────────────
+# Start from default SIGNAL_CONFIG and customize as needed
+CUSTOM_SIGNAL_CONFIG = {
+    **SIGNAL_CONFIG,
+    # Timing overrides (seconds)
+    "cycle_duration":           60,      # Total seconds per cycle
+    "base_green_duration":      20,      # Starting green
+    "min_green_duration":       8,       # Minimum (pedestrians)
+    "max_green_duration":       50,      # Maximum
+    "yellow_duration":          4,       # Transition time
+    
+    # Emergency settings
+    "emergency_duration":       25,      # Green for ambulances/fire trucks
+    "emergency_preemption":     True,    # Enable emergency priority
+    
+    # Density scaling
+    "density_scaling_factor":   0.8,     # 0.0-1.0 (higher = more responsive)
+    "enable_adaptive":          True,    # Scale green by demand
+    
+    # Collision handling
+    "collision_red_timeout":    5,       # Frames to keep red after crash
+    "enable_collision_override": True,   # Force red on collision lanes
+    
+    # Debug
+    "debug_mode":               False,   # Print per-frame info (verbose)
+    "log_file":                 SIGNAL_LOG_FILE,
+}
 
-# ─────────────────────────────────────────────
-#  2. RESULT ACCUMULATOR
-# ─────────────────────────────────────────────
+
+# ═════════════════════════════════════════════════════════════════
+#  2. RESULT ACCUMULATORS
+# ═════════════════════════════════════════════════════════════════
+
 class PipelineSummary:
     """Tracks aggregate stats across all frames without storing raw data."""
 
@@ -130,7 +180,7 @@ class PipelineSummary:
             d = v.get("direction", "unknown")
             self.direction_counts[d] = self.direction_counts.get(d, 0) + 1
 
-        # ── Emergency vehicle tracking ───────────────────────────
+        # ── Emergency vehicle tracking ───────────────────────────────
         emerg_lanes = frame_output.get("emergency_lane", [])
 
         if emerg_lanes:
@@ -162,7 +212,7 @@ class PipelineSummary:
 
     def print_summary(self):
         print("\n" + "═" * 55)
-        print("  PIPELINE SUMMARY")
+        print("  PIPELINE SUMMARY (Phase 1: Traffic Analysis)")
         print("═" * 55)
         print(f"  Frames processed        : {self.total_frames}")
         print(f"  Total vehicle obs       : {self.total_vehicles}")
@@ -201,14 +251,113 @@ class PipelineSummary:
         print("═" * 55)
 
 
-# ─────────────────────────────────────────────
-#  3. MAIN ENTRY POINT
-# ─────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════
+#  3. VISUALIZATION HELPERS (Phase 2)
+# ═════════════════════════════════════════════════════════════════
+
+def draw_signal_state(debug_frame, signal_output, lane_mapper):
+    """
+    Draw traffic signal indicators on the debug frame.
+    
+    Args:
+        debug_frame: RGB image to draw on
+        signal_output: SignalPhaseOutput from controller.update()
+        lane_mapper: LaneMapper instance with lane boundaries
+    """
+    lane_boundaries = lane_mapper.get_lane_boundaries()
+    
+    # Color coding (RGB)
+    colors = {
+        "green":  (0, 255, 0),       # Green
+        "yellow": (0, 255, 255),     # Yellow
+        "red":    (255, 0, 0),       # Red
+    }
+    
+    # Draw lane signal indicators
+    for lane_name, polygon in lane_boundaries.items():
+        if lane_name == "unknown":
+            continue
+        
+        # Determine signal color
+        if lane_name in signal_output.active_lanes:
+            signal_color = colors["green"]
+            signal_text = "GREEN"
+        elif lane_name in signal_output.yellow_lanes:
+            signal_color = colors["yellow"]
+            signal_text = "YELLOW"
+        elif lane_name in signal_output.red_lanes:
+            signal_color = colors["red"]
+            signal_text = "RED"
+        else:
+            signal_color = (100, 100, 100)  # Gray (unknown)
+            signal_text = "???"
+        
+        # Draw label at lane corner
+        pts = np.array(polygon, dtype=np.int32)
+        label_x, label_y = pts[0]
+        
+        # Draw signal box
+        box_size = 40
+        cv2.rectangle(
+            debug_frame,
+            (label_x - 20, label_y - box_size - 10),
+            (label_x + 20, label_y - 10),
+            signal_color, -1
+        )
+        
+        cv2.putText(
+            debug_frame,
+            signal_text,
+            (label_x - 15, label_y - 25),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2
+        )
+        
+        # Draw lane name
+        cv2.putText(
+            debug_frame,
+            f"{lane_name}",
+            (label_x - 30, label_y + 20),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1
+        )
+    
+    # Draw overall phase info at top
+    phase_info = (
+        f"Phase {signal_output.phase_id}: {signal_output.phase_name} | "
+        f"Green: {signal_output.green_duration}s | "
+        f"Elapsed: {signal_output.elapsed_in_phase:.1f}s"
+    )
+    
+    cv2.putText(
+        debug_frame,
+        phase_info,
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2
+    )
+    
+    # Draw override reason if applicable
+    if signal_output.override_reason and "standard" not in signal_output.override_reason:
+        override_text = f"⚠️ {signal_output.override_reason.upper()}"
+        cv2.putText(
+            debug_frame,
+            override_text,
+            (10, 60),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2
+        )
+    
+    return debug_frame
+
+
+# ═════════════════════════════════════════════════════════════════
+#  4. MAIN ENTRY POINT
+# ═════════════════════════════════════════════════════════════════
+
 def main():
+    """Main pipeline execution with Phase 1 (traffic analysis) + Phase 2 (signal control)."""
+    
     # Validate frames folder
     if not os.path.isdir(FRAMES_FOLDER):
         print(f"[ERROR] Frames folder not found: {FRAMES_FOLDER}")
-        print("        Please update FRAMES_FOLDER in example_usage.py")
+        print("        Please update FRAMES_FOLDER in example_usage_integrated.py")
         return
 
     print("=" * 55)
@@ -216,10 +365,13 @@ def main():
     print("=" * 55)
     print(f"  Source : {FRAMES_FOLDER}\n")
 
-    summary = PipelineSummary()
+    summary          = PipelineSummary()
+    collision_logger = CollisionLogger(log_file=COLLISION_LOG_FILE)
 
     # ── Run pipeline ─────────────────────────────────────────────
     # run_pipeline is a generator — frames are never stored in bulk
+    frame_count = 0
+    
     for frame_output in run_pipeline(
         frames_folder=FRAMES_FOLDER,
         preprocess_config=PREPROCESS_CONFIG,
@@ -227,50 +379,69 @@ def main():
         tracker_config=CUSTOM_TRACKER_CONFIG,
         lane_config=CUSTOM_LANE_CONFIG,
     ):
-        # ── Display debug frame ──────────────────────────────────
+        frame_count += 1
+        fid = frame_output["frame_id"]
+        
+        # ── Phase 2: Signal Control ──────────────────────────────────
+        if ENABLE_SIGNAL_CONTROLLER and signal_controller:
+            # Get signal state for this frame
+            signal_output = signal_controller.update(
+                lane_counts=frame_output["lane_counts"],
+                emergency_lane=frame_output["emergency_lane"],
+                collisions=frame_output["collisions"],
+                frame_id=fid
+            )
+            
+            # Log signal state
+            signal_logger.log(fid, signal_output)
+            
+            # Capture lane_mapper reference from first frame (for visualization)
+            if lane_mapper_ref is None:
+                # We'll get lane_mapper from the pipeline's lane_mapper
+                # For now, we'll need to pass it — or re-create it
+                from lane_mapper import LaneMapper
+                lane_mapper_ref = LaneMapper(CUSTOM_LANE_CONFIG)
+        else:
+            signal_output = None
+
+        # ── Display debug frame with signal overlay ──────────────────
         debug_frame = frame_output.get("debug_frame")
 
         if debug_frame is not None:
+            # Draw signal state overlay if Phase 2 is enabled
+            if ENABLE_SIGNAL_CONTROLLER and signal_output and lane_mapper_ref:
+                debug_frame = draw_signal_state(debug_frame, signal_output, lane_mapper_ref)
+            
+            # Convert RGB to BGR for OpenCV display
             debug_frame_bgr = cv2.cvtColor(debug_frame, cv2.COLOR_RGB2BGR)
-            cv2.imshow("Traffic View", debug_frame_bgr)
+            cv2.imshow("Traffic View (Phase 1 + Phase 2)", debug_frame_bgr)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("\n[User Exit] Quit requested")
                 break
 
-        # ── Per-frame console output ─────────────────────────────
-        # FIX C: these lines were inside the "if debug_frame" block —
-        # they now run every frame regardless of debug_frame availability.
-        fid         = frame_output["frame_id"]
-        lane_counts = frame_output["lane_counts"]
-        vehicles    = frame_output["vehicles"]
-        emerg_lane  = frame_output["emergency_lane"]  # correct key name
-
-        veh_count   = len(vehicles)
-        # Show the specific vehicle IDs that triggered the emergency flag
+        # ── Per-frame console output (short mode) ──────────────────
+        fid        = frame_output["frame_id"]
+        vehicles   = frame_output["vehicles"]
+        emerg_lane = frame_output["emergency_lane"]
         emerg_ids  = frame_output.get("emergency_veh_ids", set())
-        emerg_str  = (
-            f"  ⚠ EMERGENCY → {emerg_lane}  ({len(emerg_ids)} emergency vehicle(s): IDs {sorted(emerg_ids)})"
-            if emerg_lane else ""
-        )
-        print(f"Frame {fid:>5} | Vehicles: {veh_count:>3} | Lanes: {lane_counts}{emerg_str}")
 
-        # Optionally print full vehicle details (comment out for cleaner output)
-        if vehicles:
-            for v in vehicles:
-                print(
-                    f"         ID:{v['id']:>3}  {v['class']:<12} "
-                    f"conf:{v['confidence']:.2f}  lane:{v['lane']}  "
-                    f"dir:{v['direction']}  bbox:{v['bbox']}"
-                )
+        if emerg_lane:
+            print(f"  ⚠  Frame {fid:>5} | EMERGENCY → {emerg_lane} "
+                  f"| vehicle IDs {sorted(emerg_ids)}")
 
-        # FIX A: single update call at bottom of loop — was called twice before
-        # (once at the very top of the loop, once inside the if block)
+
+        # ── Collision logging ────────────────────────────────────
+        # CollisionLogger prints [ACCIDENT] lines and updates stats.
+        collision_logger.log(frame_output.get("collisions", []))
+
         summary.update(frame_output)
 
-    # FIX B: print_summary() is now OUTSIDE the loop — prints once at the end.
-    # Was inside the loop AND inside the if block — printed after every single frame.
+    # ── End-of-run summaries ─────────────────────────────────────
     summary.print_summary()
+    collision_logger.print_summary()
     cv2.destroyAllWindows()
+    print("\n[Complete] All summaries printed. Check output files for details.")
 
 
 if __name__ == "__main__":
