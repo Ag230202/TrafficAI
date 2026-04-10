@@ -20,13 +20,17 @@ from preprocessing import CONFIG as DEFAULT_PREPROCESS_CONFIG
 from detector import DETECTOR_CONFIG
 from tracker import TRACKER_CONFIG
 from lane_mapper import LANE_CONFIG
+from collision_detector import CollisionLogger
 
 # ─────────────────────────────────────────────
 #  1. USER CONFIGURATION — edit these
 # ─────────────────────────────────────────────
 
 # Path to your folder of extracted video frames (JPG/PNG files)
-FRAMES_FOLDER = r"D:\Downloads\frames"   # ← Change this path
+FRAMES_FOLDER = r"D:\Downloads\CrashFrame"   # ← Change this path
+
+# Path for the collision log file (set to None to disable file logging)
+COLLISION_LOG_FILE = None  # Logging to terminal only
 
 # ── Preprocessing overrides ─────────────────
 PREPROCESS_CONFIG = {
@@ -155,8 +159,6 @@ class PipelineSummary:
             )
 
             # Track unique vehicle IDs that were in emergency lanes
-            # Use the specific IDs that triggered the emergency flag
-            # (not all vehicles in the lane — those are just bystanders)
             for vid in frame_output.get("emergency_veh_ids", set()):
                 self.emergency_vehicle_ids.add(vid)
 
@@ -216,7 +218,8 @@ def main():
     print("=" * 55)
     print(f"  Source : {FRAMES_FOLDER}\n")
 
-    summary = PipelineSummary()
+    summary          = PipelineSummary()
+    collision_logger = CollisionLogger(log_file=COLLISION_LOG_FILE)
 
     # ── Run pipeline ─────────────────────────────────────────────
     # run_pipeline is a generator — frames are never stored in bulk
@@ -237,39 +240,26 @@ def main():
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
-        # ── Per-frame console output ─────────────────────────────
-        # FIX C: these lines were inside the "if debug_frame" block —
-        # they now run every frame regardless of debug_frame availability.
-        fid         = frame_output["frame_id"]
-        lane_counts = frame_output["lane_counts"]
-        vehicles    = frame_output["vehicles"]
-        emerg_lane  = frame_output["emergency_lane"]  # correct key name
-
-        veh_count   = len(vehicles)
-        # Show the specific vehicle IDs that triggered the emergency flag
+        # ── Per-frame console output (short mode) ──────────────────
+        fid        = frame_output["frame_id"]
+        vehicles   = frame_output["vehicles"]
+        emerg_lane = frame_output["emergency_lane"]
         emerg_ids  = frame_output.get("emergency_veh_ids", set())
-        emerg_str  = (
-            f"  ⚠ EMERGENCY → {emerg_lane}  ({len(emerg_ids)} emergency vehicle(s): IDs {sorted(emerg_ids)})"
-            if emerg_lane else ""
-        )
-        print(f"Frame {fid:>5} | Vehicles: {veh_count:>3} | Lanes: {lane_counts}{emerg_str}")
 
-        # Optionally print full vehicle details (comment out for cleaner output)
-        if vehicles:
-            for v in vehicles:
-                print(
-                    f"         ID:{v['id']:>3}  {v['class']:<12} "
-                    f"conf:{v['confidence']:.2f}  lane:{v['lane']}  "
-                    f"dir:{v['direction']}  bbox:{v['bbox']}"
-                )
+        if emerg_lane:
+            print(f"  ⚠  Frame {fid:>5} | EMERGENCY → {emerg_lane} "
+                  f"| vehicle IDs {sorted(emerg_ids)}")
 
-        # FIX A: single update call at bottom of loop — was called twice before
-        # (once at the very top of the loop, once inside the if block)
+
+        # ── Collision logging ────────────────────────────────────
+        # CollisionLogger prints [ACCIDENT] lines and updates stats.
+        collision_logger.log(frame_output.get("collisions", []))
+
         summary.update(frame_output)
 
-    # FIX B: print_summary() is now OUTSIDE the loop — prints once at the end.
-    # Was inside the loop AND inside the if block — printed after every single frame.
+    # ── End-of-run summaries ─────────────────────────────────────
     summary.print_summary()
+    collision_logger.print_summary()
     cv2.destroyAllWindows()
 
 
