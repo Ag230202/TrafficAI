@@ -53,9 +53,12 @@ SIGNAL_CONFIG = {
     "density_scaling_factor":   0.8,     # How aggressively to scale by demand
                                           # Higher = more responsive to density
     "enable_adaptive":          True,    # Scale green time by lane counts
+    "use_dqn":                  False,   # Phase 3 offline reinforcement learning
+    "use_dqn":                  False,   # Phase 3 offline reinforcement learning
     
-    # ── Anti-starvation ────────────────────────────────────────
+    # ── Anti-starvation ────────────────────────────────────
     "enable_anti_starvation":   True,    # Guarantee min_green per lane per cycle
+    "max_wait_cycles":           3,       # Promote a lane after being skipped this many times
     
     # ── Collision handling ──────────────────────────────────────
     "collision_red_timeout":    5,       # Frames to keep lane red after collision
@@ -111,6 +114,11 @@ class SignalControllerState:
     all_red_elapsed: float = 0.0
     collision_cooldown: Dict[str, int] = field(default_factory=dict)  # lane -> frames_remaining
     last_frame_id: int = -1
+    wait_cycle_count: Dict[str, int] = field(default_factory=dict)   # lane -> skipped cycles
+    target_phase_id: Optional[int] = None
+    current_override: Optional[str] = None
+    target_phase_id: Optional[int] = None
+    current_override: Optional[str] = None
     
     def reset_phase(self, phase_id: int, frame_id: int):
         """Reset counters when transitioning to a new phase."""
@@ -194,6 +202,22 @@ class SignalController:
         self.fps = 30
         self.frame_skip = 3  # Default; can be updated
         self.seconds_per_frame = (self.frame_skip / self.fps)
+        
+        self.dqn_agent = None
+        if self.config.get("use_dqn", False):
+            try:
+                from dqn_agent import DQNAgent
+                self.dqn_agent = DQNAgent()
+            except ImportError as e:
+                print(f"[SignalController] WARNING: Could not import DQNAgent: {e}")
+        
+        self.dqn_agent = None
+        if self.config.get("use_dqn", False):
+            try:
+                from dqn_agent import DQNAgent
+                self.dqn_agent = DQNAgent()
+            except ImportError as e:
+                print(f"[SignalController] WARNING: Could not import DQNAgent: {e}")
     
     def set_frame_rate(self, fps: int, frame_skip: int):
         """Set frame rate info for accurate time tracking."""
@@ -258,12 +282,39 @@ class SignalController:
         # ── Standard phase progression ───────────────────────────
         self.state.elapsed_in_phase += frame_delta
         
-        # Compute green duration for current phase
-        phase_def = self.phases[self.state.current_phase_id]
-        green_duration = self._compute_adaptive_green_time(
-            phase_def, lane_counts
-        )
-        self.state.phase_green_duration = green_duration
+        # Determine intent (Rule-based vs DQN)
+        min_green = self.config.get("min_green_duration", 8)
+        self.state.current_override = None
+        
+        if self.config.get("use_dqn", False) and self.dqn_agent:
+            # Phase 3: DQN Logic
+            state_vector = self._build_dqn_state_vector(lane_counts)
+            dqn_action = self.dqn_agent.predict(state_vector)
+            
+            # Priority 3 Check: Anti-starvation overrides DQN!
+            starved_phase = self._check_anti_starvation_only()
+            if starved_phase is not None:
+                target_phase_id = starved_phase
+                self.state.current_override = "anti_starvation"
+            else:
+                target_phase_id = dqn_action
+                self.state.current_override = "dqn_agent"
+                
+            # Compute a dummy green duration for UI (force switch if needed)
+            if target_phase_id != self.state.current_phase_id:
+                green_duration = max(min_green, self.state.elapsed_in_phase)
+            else:
+                green_duration = self.config.get("max_green_duration", 50)
+            self.state.phase_green_duration = green_duration
+            
+        else:
+            # Phase 2: Compute green duration for current phase
+            phase_def = self.phases[self.state.current_phase_id]
+            green_duration = self._compute_adaptive_green_time(
+                phase_def, lane_counts
+            )
+            self.state.phase_green_duration = green_duration
+            target_phase_id = None
         
         # Check if we should transition to next phase
         transition_threshold = green_duration + self.config.get("yellow_duration", 4)
@@ -272,6 +323,12 @@ class SignalController:
             # Enter yellow mode
             self.state.is_yellow_mode = True
             self.state.yellow_elapsed = 0.0
+            
+            # Pre-calculate target for yellow transition
+            if target_phase_id is not None:
+                self.state.target_phase_id = target_phase_id
+            else:
+                self.state.target_phase_id = self._get_next_phase_id(self.state.current_phase_id)
         
         elif self.state.is_yellow_mode:
             # Track time in yellow
@@ -279,18 +336,18 @@ class SignalController:
             yellow_dur = self.config.get("yellow_duration", 4)
             
             if self.state.yellow_elapsed >= yellow_dur:
-                # Transition to next phase
-                next_phase_id = self._get_next_phase_id(self.state.current_phase_id)
+                # Transition to next phase using predefined target
+                next_phase_id = getattr(self.state, "target_phase_id", None)
+                if next_phase_id is None:
+                    next_phase_id = self._get_next_phase_id(self.state.current_phase_id)
                 self.state.reset_phase(next_phase_id, frame_id)
                 phase_def = self.phases[self.state.current_phase_id]
-                green_duration = self._compute_adaptive_green_time(
-                    phase_def, lane_counts
-                )
-                self.state.phase_green_duration = green_duration
+                self.state.phase_green_duration = self._compute_adaptive_green_time(phase_def, lane_counts)
         
         # ── Build output ────────────────────────────────────────
+        phase_def = self.phases[self.state.current_phase_id]
         output = self._build_phase_output(
-            phase_def, lane_counts, collisions, frame_id
+            phase_def, lane_counts, collisions, frame_id, override_reason=getattr(self.state, "current_override", None)
         )
         
         if self.config.get("debug_mode", False):
@@ -377,14 +434,101 @@ class SignalController:
         
         return green_time
     
+
+
+    def _build_dqn_state_vector(self, lane_counts: Dict[str, int]) -> List[float]:
+        lanes = ["left_road", "bottom_road", "right_road", "top_road"]
+        counts = [float(lane_counts.get(l, 0)) for l in lanes]
+        waits = [float(self.state.wait_cycle_count.get(l, 0)) for l in lanes]
+        return counts + waits + [float(self.state.current_phase_id), float(round(self.state.elapsed_in_phase, 2))]
+
+    def _check_anti_starvation_only(self) -> Optional[int]:
+        if not self.config.get("enable_anti_starvation", True):
+            return None
+        max_wait = self.config.get("max_wait_cycles", 3)
+        best_starved_phase = None
+        best_wait = 0
+        for phase_id, phase_def in self.phases.items():
+            if phase_id == self.state.current_phase_id:
+                continue
+            for lane in phase_def.get("lanes", []):
+                wait = self.state.wait_cycle_count.get(lane, 0)
+                if wait >= max_wait and wait > best_wait:
+                    best_wait = wait
+                    best_starved_phase = phase_id
+        return best_starved_phase
+
+
+
+    def _build_dqn_state_vector(self, lane_counts: Dict[str, int]) -> List[float]:
+        lanes = ["left_road", "bottom_road", "right_road", "top_road"]
+        counts = [float(lane_counts.get(l, 0)) for l in lanes]
+        waits = [float(self.state.wait_cycle_count.get(l, 0)) for l in lanes]
+        return counts + waits + [float(self.state.current_phase_id), float(round(self.state.elapsed_in_phase, 2))]
+
+    def _check_anti_starvation_only(self) -> Optional[int]:
+        if not self.config.get("enable_anti_starvation", True):
+            return None
+        max_wait = self.config.get("max_wait_cycles", 3)
+        best_starved_phase = None
+        best_wait = 0
+        for phase_id, phase_def in self.phases.items():
+            if phase_id == self.state.current_phase_id:
+                continue
+            for lane in phase_def.get("lanes", []):
+                wait = self.state.wait_cycle_count.get(lane, 0)
+                if wait >= max_wait and wait > best_wait:
+                    best_wait = wait
+                    best_starved_phase = phase_id
+        return best_starved_phase
+
     def _get_next_phase_id(self, current_phase_id: int) -> int:
-        """Get the ID of the next phase in rotation."""
+        """
+        Get the ID of the next phase in rotation.
+        
+        Anti-starvation guard (Priority 3):
+          If any lane has been skipped for ≥ max_wait_cycles consecutive cycles,
+          its phase is promoted to run next regardless of density turn order.
+          The wait counter resets each time a lane gets a green phase.
+        """
         try:
-            current_idx = self.phase_order.index(current_phase_id)
-            next_idx = (current_idx + 1) % len(self.phase_order)
-            return self.phase_order[next_idx]
+            current_idx  = self.phase_order.index(current_phase_id)
+            default_next = self.phase_order[(current_idx + 1) % len(self.phase_order)]
         except (ValueError, IndexError):
-            return 0  # Fallback to phase 0
+            return 0
+
+        if not self.config.get("enable_anti_starvation", True):
+            return default_next
+
+        max_wait = self.config.get("max_wait_cycles", 3)
+
+        # Find the phase whose lanes have been waiting longest
+        best_starved_phase = None
+        best_wait          = 0
+
+        for phase_id, phase_def in self.phases.items():
+            if phase_id == current_phase_id:
+                continue
+            for lane in phase_def.get("lanes", []):
+                wait = self.state.wait_cycle_count.get(lane, 0)
+                if wait >= max_wait and wait > best_wait:
+                    best_wait          = wait
+                    best_starved_phase = phase_id
+
+        # Update wait counters: increment for every skipped phase's lanes,
+        # reset for the lanes that just got green (current phase)
+        for phase_id, phase_def in self.phases.items():
+            for lane in phase_def.get("lanes", []):
+                if phase_id == current_phase_id:
+                    self.state.wait_cycle_count[lane] = 0   # just served
+                else:
+                    self.state.wait_cycle_count[lane] = \
+                        self.state.wait_cycle_count.get(lane, 0) + 1
+
+        if best_starved_phase is not None:
+            return best_starved_phase  # Anti-starvation promotion
+
+        return default_next
     
     def _build_phase_output(
         self,

@@ -1,21 +1,24 @@
 """
 example_usage.py
 ----------------------------
-Entrypoint for running the full integrated pipeline with both Phase 1 (traffic analysis) and Phase 2 (signal control). This script processes video frames, detects vehicles,
-tracks them, maps them to lanes, detects collisions, and uses that information to control traffic signals in a simulated environment.
+Entrypoint for the full integrated Traffic AI pipeline:
+  Phase 1 — YOLO detection + centroid tracking + lane mapping + emergency detection
+  Phase 2 — Crash confidence scoring + police alert dispatch + rule-based signal timing
+            + data logging for Phase 3 DQN training
 
 Steps:
   1. Configure paths and parameters
-  2. Initialize Phase 1 pipeline + Phase 2 signal controller
-  3. Process frames: detect → track → signal control → log/display
-  4. Print summaries for both traffic analysis and signal timing
+  2. Initialise Phase 1 pipeline + Phase 2 components
+  3. Process frames: detect → track → crash score → signal control → alert → log
+  4. Print summaries for traffic, collisions and signal timing
 
 Run:
-    python example_usage_integrated.py
+    python example_usage.py
 
 Dependencies:
-  - Phase 1: existing pipeline.py, detector.py, etc.
-  - Phase 2: signal_controller.py, signal_logger.py
+  - Phase 1: pipeline.py, detector.py, tracker.py, lane_mapper.py, emergency_detector.py
+  - Phase 2: crash_detector.py, alert_dispatcher.py, signal_controller.py,
+             signal_logger.py, data_logger.py
 """
 
 import cv2
@@ -32,6 +35,9 @@ from collision_detector import CollisionLogger
 # ── Phase 2 imports ──────────────────────────────────────────────
 from signal_controller import SignalController, SIGNAL_CONFIG
 from signal_logger import SignalLogger
+from crash_detector import CrashDetector
+from alert_dispatcher import AlertDispatcher
+from data_logger import DataLogger
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -128,6 +134,7 @@ CUSTOM_SIGNAL_CONFIG = {
     # Density scaling
     "density_scaling_factor":   0.8,     # 0.0-1.0 (higher = more responsive)
     "enable_adaptive":          True,    # Scale green by demand
+    "use_dqn":                  True,    # Enable DQN
     
     # Collision handling
     "collision_red_timeout":    5,       # Frames to keep red after crash
@@ -135,8 +142,14 @@ CUSTOM_SIGNAL_CONFIG = {
     
     # Debug
     "debug_mode":               False,   # Print per-frame info (verbose)
-    "log_file":                 SIGNAL_LOG_FILE,
 }
+
+# ─ Output file paths ────────────────────────────────────────────
+COLLISION_LOG_FILE = "collision_log.txt"     # Collision event log
+SIGNAL_LOG_FILE    = "signal_log.txt"        # Signal phase log
+
+# ─ Phase 2 toggle ───────────────────────────────────────────────
+ENABLE_SIGNAL_CONTROLLER = True              # Set False to run Phase 1 only
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -358,6 +371,20 @@ def main():
     summary          = PipelineSummary()
     collision_logger = CollisionLogger(log_file=COLLISION_LOG_FILE)
 
+    # ── Phase 2 initialisation ───────────────────────────────────
+    signal_controller = None
+    signal_logger     = None
+    lane_mapper_ref   = None
+    crash_detector    = CrashDetector()
+    alert_dispatcher  = AlertDispatcher()
+    data_logger       = DataLogger()
+
+    if ENABLE_SIGNAL_CONTROLLER:
+        signal_controller = SignalController(config=CUSTOM_SIGNAL_CONFIG)
+        signal_logger     = SignalLogger(log_file=SIGNAL_LOG_FILE)
+        from lane_mapper import LaneMapper
+        lane_mapper_ref   = LaneMapper(CUSTOM_LANE_CONFIG)
+
     # ── Run pipeline ─────────────────────────────────────────────
     # run_pipeline is a generator — frames are never stored in bulk
     frame_count = 0
@@ -372,27 +399,36 @@ def main():
         frame_count += 1
         fid = frame_output["frame_id"]
         
-        # ── Phase 2: Signal Control ──────────────────────────────────
+        # ── Phase 2: Crash Detection (confidence-scored, temporal persistence) ──
+        # Runs FIRST — output gates the signal red override below.
+        crash_report = crash_detector.update(frame_output)
+        if crash_report:
+            sev   = crash_report["severity"].upper()
+            score = crash_report["score"]
+            lane  = crash_report["lane"]
+            print(f"  Frame {fid:>5} | [CRASH {sev}] score={score} "
+                  f"lane={lane} signals={crash_report['signals']}")
+            alert_dispatcher.dispatch(crash_report, frame_output.get("debug_frame"))
+
+        # ── Phase 2: Signal Control ───────────────────────────────────────
+        # Only pass a collision to signal_controller when crash_detector
+        # has CONFIRMED one (score >= 80, 3 consecutive frames).
+        # This replaces the raw noisy IoU collision list — eliminates
+        # the 59 false red-overrides seen when using raw collisions.
         if ENABLE_SIGNAL_CONTROLLER and signal_controller:
-            # Get signal state for this frame
+            gated_collisions = [{"lane": crash_report["lane"]}] if crash_report else []
             signal_output = signal_controller.update(
                 lane_counts=frame_output["lane_counts"],
                 emergency_lane=frame_output["emergency_lane"],
-                collisions=frame_output["collisions"],
+                collisions=gated_collisions,
                 frame_id=fid
             )
-            
-            # Log signal state
             signal_logger.log(fid, signal_output)
-            
-            # Capture lane_mapper reference from first frame (for visualization)
-            if lane_mapper_ref is None:
-                # We'll get lane_mapper from the pipeline's lane_mapper
-                # For now, we'll need to pass it — or re-create it
-                from lane_mapper import LaneMapper
-                lane_mapper_ref = LaneMapper(CUSTOM_LANE_CONFIG)
         else:
             signal_output = None
+
+        # ── Phase 2: Data logging for Phase 3 DQN training ───────────────
+        data_logger.log(frame_output, signal_output)
 
         # ── Display debug frame with signal overlay ──────────────────
         debug_frame = frame_output.get("debug_frame")
@@ -430,8 +466,18 @@ def main():
     # ── End-of-run summaries ─────────────────────────────────────
     summary.print_summary()
     collision_logger.print_summary()
+    if signal_logger:
+        signal_logger.print_summary()
+        signal_logger.export_json("signal_stats.json")
+    data_logger.close()
     cv2.destroyAllWindows()
-    print("\n[Complete] All summaries printed. Check output files for details.")
+    print("\n[Complete] All summaries printed.")
+    print("  • collision_log.txt   — per-collision events")
+    print("  • signal_log.txt      — per-frame signal state")
+    print("  • signal_stats.json   — signal summary statistics")
+    print("  • traffic_log.csv     — Phase 3 DQN training data")
+    print("  • alerts_log.csv      — confirmed crash alerts")
+    print("  • alerts/             — crash snapshot images")
 
 
 if __name__ == "__main__":

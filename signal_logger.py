@@ -125,7 +125,7 @@ class SignalLogger:
         log_msg = (
             f"Frame {frame_id:5d} | "
             f"Phase {signal_output.phase_id} ({signal_output.phase_name:20s}) | "
-            f"Green {signal_output.green_duration:2d}s | "
+            f"Green {int(signal_output.green_duration):2d}s | "
             f"Active: {', '.join(signal_output.active_lanes) or 'none':25s} | "
             f"Red: {', '.join(signal_output.red_lanes) or 'none':25s}"
         )
@@ -217,7 +217,7 @@ class SignalLogger:
         print("Average Green Time per Lane:")
         for lane, avg_green in summary.get("avg_green_per_lane", {}).items():
             max_green = summary.get("max_green_per_lane", {}).get(lane, 0)
-            print(f"  {lane:20s}: avg={avg_green:5.1f}s, max={max_green:2d}s")
+            print(f"  {lane:20s}: avg={avg_green:5.1f}s, max={int(max_green):2d}s")
         print()
         
         print("Phase Distribution:")

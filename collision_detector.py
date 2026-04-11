@@ -45,13 +45,13 @@ COLLISION_CONFIG = {
     # two vehicles as physically occupying the same space.
     # 0.0 = any overlap at all; 0.1 = 10% overlap required.
     # Keep low (0.05–0.15) — at 640x480 even a real collision shows modest IoU.
-    "iou_threshold": 0.05,
+    "iou_threshold": 0.15,
 
     # Minimum closing speed in pixels/frame for both vehicles combined.
     # Filters out stationary neighbours and slow lane-merges.
     # At frame_skip=3 and ~30fps, 1 frame ≈ 100ms, so 8px/frame ≈ ~2.9km/h
     # at typical CCTV scale. Tune upward if parked cars trigger false positives.
-    "min_closing_speed": 8.0,
+    "min_closing_speed": 15.0,
 
     # Frames to suppress re-flagging the same vehicle pair after a collision.
     # At frame_skip=3 this is roughly: cooldown * 3 / 30 seconds.
