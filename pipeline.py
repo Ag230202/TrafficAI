@@ -9,6 +9,9 @@ Yields structured per-frame output without holding frames in memory.
 Update: now includes EmergencyLightDetector alongside YOLO-based
 emergency detection — catches fire trucks and ambulances by their
 flashing lights even when YOLO misses them due to night/glare.
+
+Update: now includes CollisionDetector — checks every vehicle pair per
+frame for bounding box overlap + closing velocity and logs accidents.
 """
 
 from preprocessing import preprocess_pipeline, CONFIG as PREPROCESS_CONFIG
@@ -16,6 +19,7 @@ from detector import VehicleDetector, DETECTOR_CONFIG
 from tracker import CentroidTracker, TRACKER_CONFIG
 from lane_mapper import LaneMapper, LANE_CONFIG
 from emergency_detector import EmergencyLightDetector
+from collision_detector import CollisionDetector
 import numpy as np
 
 
@@ -26,6 +30,7 @@ def build_frame_output(
     active_tracks: list,
     lane_mapper: LaneMapper,
     emergency_light_detector: EmergencyLightDetector,
+    collision_detector: CollisionDetector,
 ) -> dict:
     """
     Assembles the final structured output dict for one frame.
@@ -41,6 +46,7 @@ def build_frame_output(
         "vehicles":      [ { "id", "lane", "bbox", "class",
                              "confidence", "direction" }, ... ],
         "emergency_lane": list,
+        "collisions":    list of collision dicts,
         "debug_frame":   np.ndarray (RGB)
     }
     """
@@ -83,6 +89,11 @@ def build_frame_output(
     # yolo_emergency_ids: specific truck/bus IDs from area+speed heuristic
     # light source doesn't give vehicle IDs (it works from pixel blobs)
     all_emergency_vehicle_ids = yolo_emergency_ids
+
+    # ── Collision detection ──────────────────────────────────────
+    # Run BEFORE stripping centroid keys — collision detector needs them.
+    # Draws red overlap rectangles on debug_frame directly.
+    collisions = collision_detector.detect(vehicles, frame_index, debug_frame)
 
     # ── Draw lane polygons ───────────────────────────────────────
     for lane_name, polygon in lane_mapper.get_lane_boundaries().items():
@@ -127,6 +138,7 @@ def build_frame_output(
         "vehicles":            vehicles,
         "emergency_lane":      all_emergency_lanes,
         "emergency_veh_ids":   all_emergency_vehicle_ids,
+        "collisions":          collisions,
         "debug_frame":         debug_frame,
     }
 
@@ -146,10 +158,11 @@ def run_pipeline(
     """
     print("[Pipeline] Initialising modules...")
 
-    detector               = VehicleDetector(detector_config or DETECTOR_CONFIG)
-    tracker                = CentroidTracker(tracker_config  or TRACKER_CONFIG)
-    lane_mapper            = LaneMapper(lane_config          or LANE_CONFIG)
-    emergency_light_det    = EmergencyLightDetector()
+    detector            = VehicleDetector(detector_config or DETECTOR_CONFIG)
+    tracker             = CentroidTracker(tracker_config  or TRACKER_CONFIG)
+    lane_mapper         = LaneMapper(lane_config          or LANE_CONFIG)
+    emergency_light_det = EmergencyLightDetector()
+    collision_det       = CollisionDetector()
 
     print("[Pipeline] All modules ready. Starting frame processing...\n")
 
@@ -214,16 +227,17 @@ def run_pipeline(
 
         # 1. Detect with YOLO
         raw_detections = detector.detect(frame_rgb, frame_index)
-        print(f"[Pipeline] Frame {frame_index}: detections={len(raw_detections)}")
+        # print(f"[Pipeline] Frame {frame_index}: detections={len(raw_detections)}")
 
         # 2. Track
         active_tracks = tracker.update(raw_detections)
-        print(f"[Pipeline] Frame {frame_index}: tracks={len(active_tracks)}")
+        # print(f"[Pipeline] Frame {frame_index}: tracks={len(active_tracks)}")
 
         # 3. Assemble output (both BGR and RGB passed)
         frame_output = build_frame_output(
             frame_index, frame_bgr, frame_rgb,
-            active_tracks, lane_mapper, emergency_light_det
+            active_tracks, lane_mapper,
+            emergency_light_det, collision_det,
         )
 
         yield frame_output

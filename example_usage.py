@@ -27,6 +27,7 @@ from preprocessing import CONFIG as DEFAULT_PREPROCESS_CONFIG
 from detector import DETECTOR_CONFIG
 from tracker import TRACKER_CONFIG
 from lane_mapper import LANE_CONFIG
+from collision_detector import CollisionLogger
 
 # ── Phase 2 imports ──────────────────────────────────────────────
 from signal_controller import SignalController, SIGNAL_CONFIG
@@ -38,18 +39,9 @@ from signal_logger import SignalLogger
 # ═════════════════════════════════════════════════════════════════
 
 # Path to your folder of extracted video frames (JPG/PNG files)
-FRAMES_FOLDER = r"D:\Downloads\CrashFrame"   # ← Change this path
+FRAMES_FOLDER = r"C:\Users\ANIMESH GARTIA\Downloads\Traffic_Footage_Demo"   # ← Change this path
 
-# Path for the collision log file (set to None to disable file logging)
-COLLISION_LOG_FILE = None  # Logging to terminal only
-
-# Path for the signal log file
-SIGNAL_LOG_FILE = "signal_log.txt"
-
-# Enable/disable Phase 2 signal controller
-ENABLE_SIGNAL_CONTROLLER = True
-
-# ─ Preprocessing overrides ──────────────────────────────────────
+# ── Preprocessing overrides ─────────────────
 PREPROCESS_CONFIG = {
     **DEFAULT_PREPROCESS_CONFIG,         # Start from defaults
     "resize_width":  640,
@@ -205,8 +197,6 @@ class PipelineSummary:
             )
 
             # Track unique vehicle IDs that were in emergency lanes
-            # Use the specific IDs that triggered the emergency flag
-            # (not all vehicles in the lane — those are just bystanders)
             for vid in frame_output.get("emergency_veh_ids", set()):
                 self.emergency_vehicle_ids.add(vid)
 

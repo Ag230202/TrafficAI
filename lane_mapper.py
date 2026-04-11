@@ -9,6 +9,29 @@ Responsibilities:
   - Count vehicles per lane
   - Flag lanes containing emergency vehicles
   - Return IDs of specific vehicles that triggered emergency flag
+
+Fix applied (Bug 2):
+  - Removed first-frame area-only emergency trigger in detect_emergency_lanes().
+    Previously, any truck/bus appearing for the first time (prev_centroid=None)
+    with a bounding box area >= 18000px^2 was immediately flagged as an emergency
+    vehicle with zero motion context. At 640x480 a moderately sized truck easily
+    clears 18000px^2, so every new large vehicle entering the frame triggered a
+    false emergency. Now the heuristic is skipped when prev_centroid is None.
+    The vehicle is re-evaluated on its second frame when real motion data exists.
+
+Fix applied (Bug 3):
+  - assign_lane() no longer force-assigns out-of-polygon detections via the
+    x-position fallback. The fallback bucketed every centroid that missed all
+    lane polygons into an arbitrary lane based purely on its x coordinate —
+    meaning partial detections at frame edges, mis-sized bounding boxes, and
+    EmergencyLightDetector blobs that landed outside all polygons all got
+    silently assigned a lane and counted/flagged. assign_lane() now returns
+    None for out-of-polygon centroids.
+  - count_vehicles_per_lane() now reads lane with no default (not "unknown"),
+    so None lanes fall into the "unknown" bucket explicitly rather than
+    matching a real lane name by accident.
+  - detect_emergency_lanes() now skips vehicles whose lane is None — an
+    out-of-polygon vehicle cannot meaningfully trigger a lane emergency alert.
 """
 
 import cv2
@@ -39,7 +62,17 @@ class LaneMapper:
     def __init__(self, lane_config: dict = None):
         self.lanes = lane_config or LANE_CONFIG
 
-    def assign_lane(self, bbox: list) -> str:
+    def assign_lane(self, bbox: list):
+        """
+        Returns the lane name string if the bbox centroid falls inside a
+        defined polygon, or None if it falls outside all polygons.
+
+        FIX (Bug 3): previously fell back to x-position bucketing when no
+        polygon matched, force-assigning every out-of-polygon centroid to
+        some lane. This caused edge-clipped detections and EmergencyLight
+        blobs outside all polygons to pollute lane counts and emergency flags.
+        Now returns None so callers can explicitly ignore unassigned detections.
+        """
         x1, y1, x2, y2 = bbox
         cx = (x1 + x2) // 2
         cy = (y1 + y2) // 2
@@ -51,20 +84,19 @@ class LaneMapper:
             if inside >= 0:
                 return lane_name
 
-        # fallback: assign by x position
-        cx = (bbox[0] + bbox[2]) // 2
-        if cx < 160:   return "left_road"
-        elif cx < 320: return "bottom_road"
-        elif cx < 480: return "right_road"
-        else:          return "top_road"
+        # Centroid is outside every defined polygon — do not force-assign.
+        return None
 
     def count_vehicles_per_lane(self, vehicle_list: list) -> dict:
         counts = {lane: 0 for lane in self.lanes}
         for vehicle in vehicle_list:
-            lane = vehicle.get("lane", "unknown")
+            # FIX (Bug 3): no default — None (out-of-polygon) must not
+            # accidentally match a real lane name string.
+            lane = vehicle.get("lane")
             if lane in counts:
                 counts[lane] += 1
             else:
+                # None lanes and any other unrecognised value go here.
                 counts["unknown"] = counts.get("unknown", 0) + 1
         return counts
 
@@ -78,14 +110,21 @@ class LaneMapper:
                                vehicles in those lanes, only the specific
                                truck/bus that passed the heuristic check.
         """
-        emergency_lanes      = []
+        emergency_lanes       = []
         emergency_vehicle_ids = set()
 
         for vehicle in vehicle_list:
-            cls   = vehicle.get("class", "").lower()
-            bbox  = vehicle.get("bbox", [0, 0, 0, 0])
-            lane  = vehicle.get("lane", "unknown")
-            vid   = vehicle.get("id")
+            cls  = vehicle.get("class", "").lower()
+            bbox = vehicle.get("bbox", [0, 0, 0, 0])
+            # FIX (Bug 3): no default — keep None as-is so the guard below
+            # can skip out-of-polygon vehicles cleanly.
+            lane = vehicle.get("lane")
+            vid  = vehicle.get("id")
+
+            # FIX (Bug 3): skip vehicles with no valid lane assignment.
+            # An out-of-polygon vehicle cannot meaningfully flag a lane.
+            if lane is None:
+                continue
 
             # Class-name check — works once model is fine-tuned on ambulance
             if cls in EMERGENCY_CLASSES:
@@ -97,18 +136,18 @@ class LaneMapper:
 
             if cls in {"truck", "bus"}:
                 prev = vehicle.get("prev_centroid")
-                triggered = False
 
+                # FIX (Bug 2): never flag on first appearance (prev_centroid=None).
+                # The original code triggered on area alone when prev was None,
+                # meaning every new large truck/bus entering the frame was
+                # immediately classified as an emergency vehicle before any
+                # motion data existed. Now we simply wait for the second frame
+                # when both area AND speed can be evaluated together.
                 if prev is None:
-                    # First frame — flag by area alone
-                    if self._bbox_area(bbox) >= EMERGENCY_BBOX_AREA_THRESHOLD:
-                        triggered = True
-                else:
-                    # Has motion history — use full area + speed check
-                    if self._is_emergency_heuristic(bbox, vehicle):
-                        triggered = True
+                    continue
 
-                if triggered:
+                # Has motion history — use full area + speed check
+                if self._is_emergency_heuristic(bbox, vehicle):
                     if lane not in emergency_lanes:
                         emergency_lanes.append(lane)
                     if vid is not None:
