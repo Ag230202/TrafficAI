@@ -560,6 +560,7 @@ class SignalController:
                 lane_counts.get(lane, 0) for lane in phase_lanes
             ),
             "collision_cooldowns": dict(self.state.collision_cooldown),
+            "wait_cycle_count": dict(self.state.wait_cycle_count),
         }
         
         # Set override reason if not already set

@@ -95,9 +95,6 @@ class DataLogger:
 
         log_path = self.cfg.get("log_path", "traffic_log.csv")
 
-        # Track cumulative wait cycles per lane (how many frames a lane had 0 green)
-        self._wait_frames: dict[str, int] = {lane: 0 for lane in self._lanes}
-
         # Open CSV (append mode — survives multiple sessions)
         write_header = not os.path.exists(log_path)
         self._file   = open(log_path, "a", newline="", encoding="utf-8")
@@ -123,15 +120,12 @@ class DataLogger:
         # ── State vector ─────────────────────────────────────
         counts = [lane_counts.get(lane, 0) for lane in self._lanes]
 
-        # Update wait frame counters
-        active_lanes = set(signal_output.active_lanes) if signal_output else set()
-        for lane in self._lanes:
-            if lane not in active_lanes:
-                self._wait_frames[lane] += 1
-            else:
-                self._wait_frames[lane] = 0  # Reset when lane gets green
-
-        waits = [self._wait_frames[lane] for lane in self._lanes]
+        # Update wait counters (using SignalController's cycle-based counts if available)
+        if signal_output and "wait_cycle_count" in signal_output.metadata:
+            wait_dict = signal_output.metadata["wait_cycle_count"]
+            waits = [wait_dict.get(lane, 0) for lane in self._lanes]
+        else:
+            waits = [0 for _ in self._lanes]
 
         # Phase info
         current_phase  = signal_output.phase_id if signal_output else -1
