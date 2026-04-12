@@ -45,16 +45,15 @@ import numpy as np
 
 ALERT_CONFIG = {
     # Directory where snapshot JPEGs are saved.
-    # Created automatically if it does not exist.
     "alerts_dir": "alerts",
 
-    # CSV log file — appended to across sessions.
+    # CSV log file
     "log_csv": "alerts_log.csv",
 
-    # HTTP endpoint for police station API.
-    # Set to None or "" to disable HTTP alerting.
-    # POST payload: JSON with full crash_report + snapshot_path.
-    "http_endpoint": None,
+    # ── TELEGRAM BOT CONFIGURATION ──
+    "telegram_enabled": True,  # Set to True to enable Telegram alerts
+    "telegram_bot_token": "8608991246:AAHI7jLPg8Oof483yxZKxBoCW_i-QhdSUzI",
+    "telegram_chat_id": "929328064",
 
     # Seconds to wait before re-alerting the same lane.
     "cooldown_seconds": 120,
@@ -63,8 +62,7 @@ ALERT_CONFIG = {
     "snapshot_quality": 85,
 
     # Minimum severity to dispatch ("possible" | "probable" | "confirmed").
-    # "probable" = only send when score ≥ 80 (already filtered by CrashDetector).
-    "min_dispatch_severity": "probable",
+    "min_dispatch_severity": "possible",
 }
 
 
@@ -74,7 +72,7 @@ ALERT_CONFIG = {
 
 _CSV_HEADER = [
     "timestamp", "frame_id", "lane", "severity", "score",
-    "vehicle_ids", "signals", "snapshot_path", "http_sent",
+    "vehicle_ids", "signals", "snapshot_path", "telegram_sent",
 ]
 
 
@@ -84,16 +82,13 @@ _CSV_HEADER = [
 
 class AlertDispatcher:
     """
-    Fires crash alerts: snapshot save, CSV log, optional HTTP POST.
-
-    Thread-safety: not designed for multi-threaded use.
-    All I/O is synchronous and runs in the calling thread.
+    Fires crash alerts: snapshot save, CSV log, and Telegram message.
     """
 
     def __init__(self, config: dict = None):
         self.cfg = config or ALERT_CONFIG
 
-        # Per-lane cooldown tracking: lane → datetime of last alert
+        # Per-lane cooldown tracking
         self._last_alert_time: dict[str, Optional[datetime]] = {}
 
         # Ensure alerts directory exists
@@ -106,7 +101,6 @@ class AlertDispatcher:
             with open(log_csv, "w", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(_CSV_HEADER)
 
-        # Logger (console only — file I/O goes to CSV)
         self._log = logging.getLogger("AlertDispatcher")
         if not self._log.handlers:
             ch = logging.StreamHandler()
@@ -114,89 +108,44 @@ class AlertDispatcher:
             self._log.addHandler(ch)
         self._log.setLevel(logging.INFO)
 
-    # ──────────────────────────────────────────────────────────
-    #  PUBLIC API
-    # ──────────────────────────────────────────────────────────
-
     def dispatch(self, crash_report: dict, debug_frame: Optional[np.ndarray] = None) -> bool:
-        """
-        Main entry point. Called when CrashDetector returns a crash_report.
-
-        Args:
-            crash_report: dict from CrashDetector._build_crash_report()
-                Keys: lane, score, severity, vehicle_ids, frame_id,
-                      timestamp, signals
-            debug_frame:  RGB np.ndarray to save as snapshot, or None.
-
-        Returns:
-            True  if alert was dispatched (cooldown OK, severity met)
-            False if suppressed (cooldown active or severity too low)
-        """
         lane     = crash_report.get("lane", "unknown")
         severity = crash_report.get("severity", "possible")
 
-        # ── Severity gate ───────────────────────────────────────
         severity_rank = {"possible": 0, "probable": 1, "confirmed": 2}
         min_sev = self.cfg.get("min_dispatch_severity", "probable")
         if severity_rank.get(severity, 0) < severity_rank.get(min_sev, 1):
             return False
 
-        # ── Cooldown gate ───────────────────────────────────────
         if not self._check_cooldown(lane):
-            return False  # Too soon since last alert for this lane
+            return False
 
-        # ── Actions ─────────────────────────────────────────────
         snapshot_path = self._save_snapshot(debug_frame, crash_report)
-        self._write_local_log(crash_report, snapshot_path)
-        http_ok = self._send_http_alert(crash_report, snapshot_path)
+        telegram_ok = self._send_telegram_alert(crash_report, snapshot_path)
+        self._write_local_log(crash_report, snapshot_path, telegram_ok)
 
-        # ── Console output ──────────────────────────────────────
         score = crash_report.get("score", 0)
         fid   = crash_report.get("frame_id", "?")
+        
         self._log.info(
-            f"[CRASH ALERT] Frame {fid} | Lane: {lane} | "
-            f"Severity: {severity.upper()} | Score: {score} | "
-            f"Signals: {crash_report.get('signals', [])} | "
-            f"Snapshot: {snapshot_path}"
+            f"[CRASH ALERT] Frame {fid} | {lane} | {severity.upper()} | Score: {score}"
         )
-        if http_ok:
-            self._log.info(f"[CRASH ALERT] HTTP POST sent to police endpoint.")
-        elif self.cfg.get("http_endpoint"):
-            self._log.warning(f"[CRASH ALERT] HTTP POST FAILED — check endpoint.")
+        if telegram_ok:
+            self._log.info(f"[TELEGRAM BOT] Alert and snapshot successfully delivered!")
 
-        # ── Update cooldown ─────────────────────────────────────
         self._last_alert_time[lane] = datetime.now()
-
         return True
 
-    # ──────────────────────────────────────────────────────────
-    #  INTERNAL METHODS
-    # ──────────────────────────────────────────────────────────
-
     def _check_cooldown(self, lane: str) -> bool:
-        """Returns True if enough time has passed since the last alert for this lane."""
         last = self._last_alert_time.get(lane)
         if last is None:
-            return True  # First alert for this lane
-
+            return True
         elapsed = (datetime.now() - last).total_seconds()
-        cooldown = self.cfg.get("cooldown_seconds", 120)
-        return elapsed >= cooldown
+        return elapsed >= self.cfg.get("cooldown_seconds", 120)
 
-    def _save_snapshot(
-        self,
-        debug_frame: Optional[np.ndarray],
-        report: dict,
-    ) -> str:
-        """
-        Saves debug_frame as a JPEG to the alerts/ folder.
-        Filename includes timestamp, lane and score for easy triage.
-
-        Returns: relative file path string (or "no_snapshot" if frame is None).
-        """
+    def _save_snapshot(self, debug_frame: Optional[np.ndarray], report: dict) -> str:
         if debug_frame is None:
             return "no_snapshot"
-
         alerts_dir = self.cfg.get("alerts_dir", "alerts")
         ts = datetime.now().strftime("%H-%M-%S")
         lane  = report.get("lane", "unknown").replace(" ", "_")
@@ -204,19 +153,27 @@ class AlertDispatcher:
         fname = f"alert_{ts}_{lane}_score{score}.jpg"
         fpath = os.path.join(alerts_dir, fname)
 
-        # Convert RGB → BGR for cv2.imwrite
         frame_bgr = cv2.cvtColor(debug_frame, cv2.COLOR_RGB2BGR)
         quality   = self.cfg.get("snapshot_quality", 85)
         cv2.imwrite(fpath, frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
-
         return fpath
 
-    def _write_local_log(self, report: dict, snapshot_path: str) -> None:
-        """
-        Appends one row to alerts_log.csv.
-        Always runs — even if HTTP fails.
-        """
+    def _write_local_log(self, report: dict, snapshot_path: str, telegram_ok: bool) -> None:
         log_csv = self.cfg.get("log_csv", "alerts_log.csv")
+        
+        # FIX: Check if we need to update the header from 'http_sent' to 'telegram_sent'
+        header_needs_update = False
+        if os.path.exists(log_csv):
+            with open(log_csv, 'r') as f:
+                first_line = f.readline()
+                if "http_sent" in first_line:
+                    header_needs_update = True
+        
+        if header_needs_update:
+            # Simple way to clear old log and start fresh with correct header
+            with open(log_csv, "w", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerow(_CSV_HEADER)
+
         row = {
             "timestamp":     report.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             "frame_id":      report.get("frame_id", ""),
@@ -226,56 +183,57 @@ class AlertDispatcher:
             "vehicle_ids":   json.dumps(report.get("vehicle_ids", [])),
             "signals":       json.dumps(report.get("signals", [])),
             "snapshot_path": snapshot_path,
-            "http_sent":     False,  # updated below if HTTP succeeds
+            "telegram_sent": telegram_ok,
         }
-
         with open(log_csv, "a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=_CSV_HEADER)
             writer.writerow(row)
 
-    def _send_http_alert(self, report: dict, snapshot_path: str) -> bool:
-        """
-        HTTP POST to police station API endpoint.
-        Returns True on success, False on failure or if endpoint not configured.
-
-        Payload JSON:
-          {
-            "timestamp":     "2026-04-11 15:45:06",
-            "lane":          "bottom_road",
-            "severity":      "confirmed",
-            "score":         110,
-            "vehicle_ids":   [3, 7],
-            "confidence":    0.95,
-            "snapshot_path": "alerts/alert_15-45-06_bottom_road_score110.jpg"
-          }
-        """
-        endpoint = self.cfg.get("http_endpoint")
-        if not endpoint:
-            return False  # Graceful no-op — endpoint not configured
+    def _send_telegram_alert(self, report: dict, snapshot_path: str) -> bool:
+        if not self.cfg.get("telegram_enabled"):
+            return False
 
         try:
-            import urllib.request
-            payload = {
-                "timestamp":     report.get("timestamp", ""),
-                "lane":          report.get("lane", ""),
-                "severity":      report.get("severity", ""),
-                "score":         report.get("score", 0),
-                "vehicle_ids":   report.get("vehicle_ids", []),
-                "confidence":    0.95 if report.get("severity") == "confirmed" else 0.80,
-                "snapshot_path": snapshot_path,
-            }
-            data    = json.dumps(payload).encode("utf-8")
-            req     = urllib.request.Request(
-                endpoint,
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST",
+            import requests
+            
+            token = self.cfg.get("telegram_bot_token")
+            chat_id = self.cfg.get("telegram_chat_id")
+            url = f"https://api.telegram.org/bot{token}/sendPhoto"
+
+            # Format the caption using HTML (more robust than Markdown for underscores)
+            caption = (
+                f"🚨 <b>TRAFFIC AI ACCIDENT ALERT</b> 🚨\n\n"
+                f"📍 <b>Location:</b> {report.get('lane', 'Unknown Lane')}\n"
+                f"⚠️ <b>Severity:</b> {str(report.get('severity')).upper()}\n"
+                f"⏱️ <b>Time:</b> {report.get('timestamp')}\n"
+                f"🚗 <b>Vehicles Involved IDs:</b> {report.get('vehicle_ids')}\n\n"
+                f"System Confidence Score: {report.get('score')} / 100"
             )
-            response = urllib.request.urlopen(req, timeout=5)
-            return response.status == 200
+
+            files = {}
+            if os.path.exists(snapshot_path):
+                files = {'photo': open(snapshot_path, 'rb')}
+
+            data = {
+                'chat_id': chat_id,
+                'caption': caption,
+                'parse_mode': 'HTML'
+            }
+
+            if files:
+                response = requests.post(url, data=data, files=files, timeout=10)
+            else:
+                # Fallback to text only if image is missing
+                url_text = f"https://api.telegram.org/bot{token}/sendMessage"
+                data_text = {'chat_id': chat_id, 'text': caption, 'parse_mode': 'HTML'}
+                response = requests.post(url_text, data=data_text, timeout=5)
+
+            if response.status_code != 200:
+                self._log.warning(f"[TELEGRAM BOT] Telegram API Error {response.status_code}: {response.text}")
+                return False
+
+            return True
 
         except Exception as e:
-            # Any failure — network down, endpoint wrong, timeout — silently fails.
-            # The CSV log is always written first, so no data is lost.
-            self._log.warning(f"[AlertDispatcher] HTTP POST failed: {e}")
+            self._log.warning(f"[TELEGRAM BOT] System Error: {e}")
             return False
