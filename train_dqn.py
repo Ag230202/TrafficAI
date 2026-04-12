@@ -166,17 +166,43 @@ def train(csv_path="traffic_log.csv", epochs=100, batch_size=32, save_path="dqn_
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
         correct = 0
         total = 0
+        
+        # New Metrics Tracking
+        total_q_max = 0.0
+        ai_action_counts = {0: 0, 1: 0, 2: 0, 3: 0}
+        rule_action_counts = {0: 0, 1: 0, 2: 0, 3: 0}
+
         with torch.no_grad():
             for b_states, b_actions, _, _ in test_loader:
                 b_states = b_states.to(device)
                 b_actions = b_actions.to(device)
                 q_vals = policy_net(b_states)
+                
                 preds = q_vals.argmax(dim=1)
+                max_q = q_vals.max(dim=1)[0]
+                
                 correct += (preds == b_actions).sum().item()
                 total += b_actions.size(0)
+                total_q_max += max_q.sum().item()
+                
+                for p, a in zip(preds.cpu().numpy(), b_actions.cpu().numpy()):
+                    ai_action_counts[p] += 1
+                    rule_action_counts[a] += 1
         
         match_rate = (correct / total) * 100
-        print(f"Evaluation against Rule-based Policy (Test Set): {match_rate:.2f}% Match")
+        avg_confidence = total_q_max / total
+        
+        print("\n" + "="*50)
+        print("          === ADVANCED EVALUATION METRICS ===")
+        print("="*50)
+        print(f"1. Rule-Based Match Rate:      {match_rate:.2f}%")
+        print(f"2. Mean AI Confidence (Q-val): {avg_confidence:.4f}")
+        print("\n3. Action Selection Distribution (Rule-Based vs AI):")
+        print(f"   Lane 0:  Rule={rule_action_counts[0]:<5} | AI={ai_action_counts[0]:<5}")
+        print(f"   Lane 1:  Rule={rule_action_counts[1]:<5} | AI={ai_action_counts[1]:<5}")
+        print(f"   Lane 2:  Rule={rule_action_counts[2]:<5} | AI={ai_action_counts[2]:<5}")
+        print(f"   Lane 3:  Rule={rule_action_counts[3]:<5} | AI={ai_action_counts[3]:<5}")
+        print("="*50 + "\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
