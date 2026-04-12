@@ -54,7 +54,6 @@ SIGNAL_CONFIG = {
                                           # Higher = more responsive to density
     "enable_adaptive":          True,    # Scale green time by lane counts
     "use_dqn":                  False,   # Phase 3 offline reinforcement learning
-    "use_dqn":                  False,   # Phase 3 offline reinforcement learning
     
     # ── Anti-starvation ────────────────────────────────────
     "enable_anti_starvation":   True,    # Guarantee min_green per lane per cycle
@@ -202,14 +201,6 @@ class SignalController:
         self.fps = 30
         self.frame_skip = 3  # Default; can be updated
         self.seconds_per_frame = (self.frame_skip / self.fps)
-        
-        self.dqn_agent = None
-        if self.config.get("use_dqn", False):
-            try:
-                from dqn_agent import DQNAgent
-                self.dqn_agent = DQNAgent()
-            except ImportError as e:
-                print(f"[SignalController] WARNING: Could not import DQNAgent: {e}")
         
         self.dqn_agent = None
         if self.config.get("use_dqn", False):
@@ -459,28 +450,6 @@ class SignalController:
         return best_starved_phase
 
 
-
-    def _build_dqn_state_vector(self, lane_counts: Dict[str, int]) -> List[float]:
-        lanes = ["left_road", "bottom_road", "right_road", "top_road"]
-        counts = [float(lane_counts.get(l, 0)) for l in lanes]
-        waits = [float(self.state.wait_cycle_count.get(l, 0)) for l in lanes]
-        return counts + waits + [float(self.state.current_phase_id), float(round(self.state.elapsed_in_phase, 2))]
-
-    def _check_anti_starvation_only(self) -> Optional[int]:
-        if not self.config.get("enable_anti_starvation", True):
-            return None
-        max_wait = self.config.get("max_wait_cycles", 3)
-        best_starved_phase = None
-        best_wait = 0
-        for phase_id, phase_def in self.phases.items():
-            if phase_id == self.state.current_phase_id:
-                continue
-            for lane in phase_def.get("lanes", []):
-                wait = self.state.wait_cycle_count.get(lane, 0)
-                if wait >= max_wait and wait > best_wait:
-                    best_wait = wait
-                    best_starved_phase = phase_id
-        return best_starved_phase
 
     def _get_next_phase_id(self, current_phase_id: int) -> int:
         """

@@ -37,6 +37,11 @@ def load_and_preprocess_data(csv_path: str):
         "current_phase", "time_in_phase"
     ]
     
+    # Robustness: If header is wrong, re-read with explicit names
+    if "frame_id" not in df.columns:
+        names = ["timestamp", "frame_id"] + feature_cols + ["action", "reward", "next_state"]
+        df = pd.read_csv(csv_path, header=None, names=names[:len(df.columns)])
+    
     states = []
     actions = []
     rewards = []
