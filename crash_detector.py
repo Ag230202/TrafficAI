@@ -55,16 +55,16 @@ import numpy as np
 
 CRASH_DETECTOR_CONFIG = {
     # ── Signal scores ──────────────────────────────────────────
-    "score_bbox_overlap":      40,   # IoU ≥ iou_threshold between 2 tracks
+    "score_bbox_overlap":      60,   # Increased from 40 so a single overlap crosses the 50 threshold
     "score_id_vanish":         35,   # 3+ IDs vanish from same lane at once
     "score_count_drop":        30,   # Lane count drops ≥ count_drop_threshold
     "score_direction_conflict": 25,  # Two vehicles heading toward each other
 
     # ── Thresholds ──────────────────────────────────────────────
-    "iou_threshold":           0.30, # Min IoU to count as overlap signal
+    "iou_threshold":           0.05, # Lowered from 0.30 so ANY contact generates score
     "min_vanish_count":        3,    # Min IDs vanishing to score the signal
     "count_drop_threshold":    3,    # Min vehicle count drop to score signal
-    "persistence_frames":      3,    # Frames score must stay above threshold
+    "persistence_frames":      1,    # Lowered from 3 to 1 to trigger immediately
 
     # ── Confidence bands ────────────────────────────────────────
     "threshold_possible":      50,   # Score ≥ 50: possible crash, log only

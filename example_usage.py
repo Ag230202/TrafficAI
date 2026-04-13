@@ -45,7 +45,7 @@ from data_logger import DataLogger
 # ═════════════════════════════════════════════════════════════════
 
 # Path to your folder of extracted video frames (JPG/PNG files)
-FRAMES_FOLDER = r"C:\Users\ANIMESH GARTIA\Downloads\Traffic_Footage_Demo"   # ← Change this path
+FRAMES_FOLDER = r"D:\Traffic_AI\Traffic_Footage_Sanity"   # ← Change this path
 
 # ── Preprocessing overrides ─────────────────
 PREPROCESS_CONFIG = {
@@ -134,7 +134,7 @@ CUSTOM_SIGNAL_CONFIG = {
     # Density scaling
     "density_scaling_factor":   0.8,     # 0.0-1.0 (higher = more responsive)
     "enable_adaptive":          True,    # Scale green by demand
-    "use_dqn":                  True,    # Enable DQN
+    "use_dqn":                  False,    # Enable DQN
     
     # Collision handling
     "collision_red_timeout":    5,       # Frames to keep red after crash
