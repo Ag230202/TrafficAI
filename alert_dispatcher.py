@@ -37,7 +37,10 @@ from typing import Optional
 
 import cv2
 import numpy as np
+from dotenv import load_dotenv
 
+# Load environment variables from .env file
+load_dotenv()
 
 # ─────────────────────────────────────────────
 #  CONFIGURATION
@@ -52,8 +55,8 @@ ALERT_CONFIG = {
 
     # ── TELEGRAM BOT CONFIGURATION ──
     "telegram_enabled": True,  # Set to True to enable Telegram alerts
-    "telegram_bot_token": "8608991246:AAHI7jLPg8Oof483yxZKxBoCW_i-QhdSUzI",
-    "telegram_chat_id": "929328064",
+    "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN", ""),
+    "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", ""),
 
     # Seconds to wait before re-alerting the same lane.
     "cooldown_seconds": 120,

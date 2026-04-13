@@ -25,7 +25,12 @@ import cv2
 import os
 import json
 import numpy as np
+from dotenv import load_dotenv
 from pipeline import run_pipeline
+
+# Load environment variables
+load_dotenv()
+
 from preprocessing import CONFIG as DEFAULT_PREPROCESS_CONFIG
 from detector import DETECTOR_CONFIG
 from tracker import TRACKER_CONFIG
@@ -45,8 +50,8 @@ from data_logger import DataLogger
 # ═════════════════════════════════════════════════════════════════
 
 # Path to your folder of extracted video frames (JPG/PNG files)
-FRAMES_FOLDER = r"D:\Traffic_AI\Traffic_Footage_Sanity"   # ← Change this path
-
+# Now loaded from .env for security and portability
+FRAMES_FOLDER = os.getenv("FRAMES_FOLDER_PATH", "")
 # ── Preprocessing overrides ─────────────────
 PREPROCESS_CONFIG = {
     **DEFAULT_PREPROCESS_CONFIG,         # Start from defaults
