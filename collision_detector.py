@@ -58,6 +58,10 @@ COLLISION_CONFIG = {
     # Default 10 → suppresses for ~1 second of real video.
     "collision_cooldown_frames": 10,
 
+    # Minimum bounding box area in pixels to consider as a valid vehicle.
+    # Filters out small debris resulting from collisions.
+    "min_bbox_area": 1500,
+
     # Draw collision markers on the debug frame.
     "draw_debug": True,
 
@@ -177,7 +181,18 @@ class CollisionDetector:
         iou_thresh = cfg["iou_threshold"]
         min_speed  = cfg["min_closing_speed"]
         cooldown   = cfg["collision_cooldown_frames"]
+        min_area   = cfg.get("min_bbox_area", 1500)
         collisions = []
+
+        # Filter out small pieces (debris) to avoid false collisions
+        valid_vehicles = []
+        for v in vehicles:
+            x1, y1, x2, y2 = v["bbox"]
+            area = max(0, x2 - x1) * max(0, y2 - y1)
+            if area >= min_area:
+                valid_vehicles.append(v)
+        
+        vehicles = valid_vehicles
 
         # Need at least 2 vehicles to have a collision
         if len(vehicles) < 2:

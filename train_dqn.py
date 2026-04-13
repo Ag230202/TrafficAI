@@ -116,6 +116,7 @@ def train(csv_path="traffic_log.csv", epochs=100, batch_size=32, save_path="dqn_
     
     optimizer = optim.Adam(policy_net.parameters(), lr=1e-3)
     loss_fn = nn.MSELoss()
+    ce_loss = nn.CrossEntropyLoss()
     gamma = 0.99  # discount factor
 
     # 3. Epoch Loop
@@ -140,7 +141,8 @@ def train(csv_path="traffic_log.csv", epochs=100, batch_size=32, save_path="dqn_
                 target_q_values = b_rewards + (gamma * max_next_q_values)
 
             # Gradient Descent
-            loss = loss_fn(q_values_for_actions, target_q_values)
+            loss = loss_fn(q_values_for_actions, target_q_values) # Pure DQN loss
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
