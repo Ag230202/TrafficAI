@@ -30,6 +30,9 @@ from pathlib import Path
 from collections import deque, defaultdict
 from typing import Optional
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import cv2
 import numpy as np
 import streamlit as st
@@ -252,6 +255,8 @@ def pipeline_thread(source_path: str, config: dict):
     Background worker that runs the full Traffic AI pipeline.
     Writes results into st.session_state (thread-safe for simple assignments).
     """
+    print(f"\n[INFO] Starting AI Pipeline Thread...")
+    print(f"[INFO] Source: {source_path}")
     try:
         # ── Lazy imports (avoid loading at module level) ────────────────
         from pipeline import run_pipeline, build_frame_output
@@ -367,7 +372,11 @@ def pipeline_thread(source_path: str, config: dict):
         t_prev = time.time()
         for frame_index, frame_bgr in frame_source:
             if st.session_state.stop_flag:
+                print("[INFO] Stop signal received. Terminating pipeline thread...")
                 break
+
+            if frame_index % (frame_skip * 10) == 0:
+                 print(f"[PROGRESS] Processing frame {frame_index}...")
 
             frame_rgb = preprocess_bgr(frame_bgr)
 
@@ -435,14 +444,16 @@ def pipeline_thread(source_path: str, config: dict):
             # Event log
             ts = datetime.now().strftime("%H:%M:%S")
             if crash_report:
+                msg = f"CRASH [{crash_report['severity'].upper()}] lane={crash_report['lane']} score={crash_report['score']}"
+                print(f"[ALERT] {msg}")
                 st.session_state.event_log.appendleft(
-                    {"type": "crash", "ts": ts,
-                     "msg": f"CRASH [{crash_report['severity'].upper()}] lane={crash_report['lane']} score={crash_report['score']}"}
+                    {"type": "crash", "ts": ts, "msg": msg}
                 )
             for emg in frame_out.get("emergency_lane", []):
+                msg = f"EMERGENCY vehicle → {emg}"
+                print(f"[ALERT] {msg}")
                 st.session_state.event_log.appendleft(
-                    {"type": "emerg", "ts": ts,
-                     "msg": f"EMERGENCY vehicle → {emg}"}
+                    {"type": "emerg", "ts": ts, "msg": msg}
                 )
 
     except Exception as e:
@@ -463,7 +474,7 @@ with st.sidebar:
     st.markdown("---")
 
     st.markdown("### Source")
-    source_path = st.text_input("Frames folder path", value="/Users/bhabashismishra/Downloads/frame")
+    source_path = st.text_input("Frames folder path", value=os.getenv("FRAMES_FOLDER_PATH",""))
 
     st.markdown("### Detection")
     conf_thresh = st.slider("Confidence threshold", 0.05, 0.9, 0.15, 0.01)
@@ -476,9 +487,9 @@ with st.sidebar:
 
     st.markdown("---")
     col1, col2 = st.columns(2)
-    start_btn = col1.button("▶ Start", use_container_width=True,
+    start_btn = col1.button("▶ Start", width="stretch",
                              disabled=st.session_state.running or not source_path)
-    stop_btn  = col2.button("⏹ Stop",  use_container_width=True,
+    stop_btn  = col2.button("⏹ Stop",  width="stretch",
                              disabled=not st.session_state.running)
 
     if start_btn and source_path:
@@ -530,7 +541,7 @@ with col_left:
     video_placeholder = st.empty()
 
     if st.session_state.frame_rgb is not None:
-        video_placeholder.image(st.session_state.frame_rgb, use_column_width=True, channels="RGB")
+        video_placeholder.image(st.session_state.frame_rgb, width="stretch", channels="RGB")
     else:
         video_placeholder.markdown(
             '<div style="background:#0d1320;border:1px dashed #1e293b;border-radius:8px;'
@@ -603,7 +614,7 @@ with col_mid:
         xaxis=dict(showgrid=False, color="#475569"),
         yaxis=dict(showgrid=True, gridcolor="#1e293b", color="#475569", dtick=1),
     )
-    st.plotly_chart(fig_bar, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig_bar, width="stretch", config={"displayModeBar": False})
 
     # Rolling count history (sparklines per lane)
     st.markdown('<p class="section-head">Count History</p>', unsafe_allow_html=True)
@@ -626,7 +637,7 @@ with col_mid:
         legend=dict(orientation="h", y=-0.2, font=dict(size=9)),
         showlegend=True,
     )
-    st.plotly_chart(fig_line, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig_line, width="stretch", config={"displayModeBar": False})
 
     # Direction distribution
     st.markdown('<p class="section-head">Direction Distribution</p>', unsafe_allow_html=True)
@@ -646,7 +657,7 @@ with col_mid:
             legend=dict(orientation="h", font=dict(size=8, color="#64748b"), y=-0.1),
             showlegend=True,
         )
-        st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig_pie, width="stretch", config={"displayModeBar": False})
     else:
         st.markdown('<div style="color:#334155;font-size:0.75rem;text-align:center;padding:12px;">Waiting for data…</div>', unsafe_allow_html=True)
 

@@ -413,7 +413,7 @@ def main():
             lane  = crash_report["lane"]
             print(f"  Frame {fid:>5} | [CRASH {sev}] score={score} "
                   f"lane={lane} signals={crash_report['signals']}")
-            alert_dispatcher.dispatch(crash_report, frame_output.get("debug_frame"))
+            alert_dispatcher.dispatch(crash_report, frame_output.get("raw_frame"))
 
         # ── Phase 2: Signal Control ───────────────────────────────────────
         # Only pass a collision to signal_controller when crash_detector
