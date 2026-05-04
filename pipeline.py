@@ -96,15 +96,30 @@ def build_frame_output(
     collisions = collision_detector.detect(vehicles, frame_index, debug_frame)
 
     # ── Draw lane polygons ───────────────────────────────────────
+    colors = {
+        "left_road": (0, 0, 255),    # Blue in RGB
+        "bottom_road": (0, 255, 0),  # Green in RGB
+        "right_road": (255, 0, 0),   # Red in RGB
+        "top_road": (255, 255, 0)    # Yellow in RGB
+    }
+    
     for lane_name, polygon in lane_mapper.get_lane_boundaries().items():
         pts = np.array(polygon, dtype=np.int32).reshape((-1, 1, 2))
-        cv2.polylines(debug_frame, [pts], isClosed=True, color=(255, 0, 0), thickness=2)
+        color = colors.get(lane_name, (0, 255, 255))
+        
+        # draw filled transparent polygon
+        overlay = debug_frame.copy()
+        cv2.fillPoly(overlay, [pts], color)
+        cv2.addWeighted(overlay, 0.3, debug_frame, 0.7, 0, debug_frame)
+        
+        # draw border
+        cv2.polylines(debug_frame, [pts], isClosed=True, color=color, thickness=2)
 
         label_x, label_y = polygon[0]
         cv2.putText(
             debug_frame, lane_name,
             (label_x + 5, label_y + 20),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2
         )
 
     # ── Draw vehicle bounding boxes ──────────────────────────────

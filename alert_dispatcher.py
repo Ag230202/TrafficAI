@@ -140,17 +140,22 @@ class AlertDispatcher:
         return True
 
     def _check_cooldown(self, lane: str) -> bool:
-        last = self._last_alert_time.get(lane)
-        if last is None:
-            return True
-        elapsed = (datetime.now() - last).total_seconds()
-        return elapsed >= self.cfg.get("cooldown_seconds", 120)
+        # Global cooldown: prevent spam if crash vehicles slide into a different lane
+        now = datetime.now()
+        for last in self._last_alert_time.values():
+            if last is not None:
+                elapsed = (now - last).total_seconds()
+                if elapsed < self.cfg.get("cooldown_seconds", 120):
+                    return False
+        return True
 
     def _save_snapshot(self, debug_frame: Optional[np.ndarray], report: dict) -> str:
         if debug_frame is None:
             return "no_snapshot"
         alerts_dir = self.cfg.get("alerts_dir", "alerts")
-        ts = datetime.now().strftime("%H-%M-%S")
+        
+        # Add microseconds to ensure every snapshot has a 100% unique filename
+        ts = datetime.now().strftime("%H-%M-%S-%f")[:12]
         lane  = report.get("lane", "unknown").replace(" ", "_")
         score = report.get("score", 0)
         fname = f"alert_{ts}_{lane}_score{score}.jpg"

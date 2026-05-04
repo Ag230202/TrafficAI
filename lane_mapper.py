@@ -37,21 +37,21 @@ Fix applied (Bug 3):
 import cv2
 import numpy as np
 
-# Coordinates are for resized frame 640x480
+# Coordinates are for resized frame 1280x720
 LANE_CONFIG = {
-    "left_road": [
-        (0, 250), (200, 200), (200, 480), (0, 480)
-    ],
-    "bottom_road": [
-        (200, 300), (450, 300), (450, 480), (200, 480)
-    ],
-    "right_road": [
-        (450, 250), (640, 200), (640, 480), (450, 480)
-    ],
-    "top_road": [
-        (200, 0), (450, 0), (450, 250), (200, 250)
-    ],
+    "left_road": [(8,399),(397,256),(492,677),(7,692)],
+    "bottom_road": [(1083,411),(1269,635),(1277,714),(801,717)],
+    "right_road": [(1005,81),(1069,134),(1028,304),(784,164)],
+    "top_road": [(405,51),(466,40),(723,159),(455,209)]
 }
+
+# Optional global shift if camera moved
+GLOBAL_SHIFT_X = 0
+GLOBAL_SHIFT_Y = 0
+
+if GLOBAL_SHIFT_X != 0 or GLOBAL_SHIFT_Y != 0:
+    for lane in LANE_CONFIG:
+        LANE_CONFIG[lane] = [(x + GLOBAL_SHIFT_X, y + GLOBAL_SHIFT_Y) for (x, y) in LANE_CONFIG[lane]]
 
 EMERGENCY_CLASSES = {"ambulance", "fire truck", "firetruck", "fire_truck"}
 EMERGENCY_BBOX_AREA_THRESHOLD = 18000
