@@ -273,8 +273,8 @@ def pipeline_thread(source_path: str, config: dict):
         # ── Build configs from dashboard settings ───────────────────────
         preprocess_cfg = {
             **DEFAULT_PREPROCESS_CONFIG,
-            "resize_width":  640,
-            "resize_height": 480,
+            "resize_width":  1280,
+            "resize_height": 720,
             "frame_skip":    config.get("frame_skip", 3),
             "rois":          [],
             "alpha":         config.get("alpha", 1.2),
@@ -391,8 +391,9 @@ def pipeline_thread(source_path: str, config: dict):
 
             # Crash detection
             crash_report = crash_det.update(frame_out)
+            is_new_crash = False
             if crash_report:
-                alert_disp.dispatch(crash_report, frame_out.get("debug_frame"))
+                is_new_crash = alert_disp.dispatch(crash_report, frame_out.get("debug_frame"))
 
             # Signal control
             gated_collisions = [{"lane": crash_report["lane"]}] if crash_report else []
@@ -429,7 +430,7 @@ def pipeline_thread(source_path: str, config: dict):
             s = st.session_state.stats
             s["total_frames"]   += 1
             s["total_vehicles"] += len(frame_out["vehicles"])
-            if crash_report:
+            if is_new_crash:
                 s["total_collisions"] += 1
             if frame_out.get("emergency_lane"):
                 s["total_emergency"] += 1
@@ -443,7 +444,7 @@ def pipeline_thread(source_path: str, config: dict):
 
             # Event log
             ts = datetime.now().strftime("%H:%M:%S")
-            if crash_report:
+            if is_new_crash:
                 msg = f"CRASH [{crash_report['severity'].upper()}] lane={crash_report['lane']} score={crash_report['score']}"
                 print(f"[ALERT] {msg}")
                 st.session_state.event_log.appendleft(
