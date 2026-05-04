@@ -239,6 +239,10 @@ def _init_state():
         "fps_deque":        deque(maxlen=20),
         "current_fps":      0.0,
         "frames_processed": 0,
+        "last_crash_time":  0.0,
+        "last_emerg_time":  0.0,
+        "persisted_crash":  None,
+        "persisted_emerg":  [],
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -419,7 +423,14 @@ def pipeline_thread(source_path: str, config: dict):
             st.session_state.lane_counts     = frame_out["lane_counts"]
             st.session_state.signal_output   = signal_out.to_dict() if signal_out else None
             st.session_state.crash_report    = crash_report
+            if crash_report:
+                st.session_state.last_crash_time = time.time()
+                st.session_state.persisted_crash = crash_report
+
             st.session_state.emergency_lanes = frame_out.get("emergency_lane", [])
+            if st.session_state.emergency_lanes:
+                st.session_state.last_emerg_time = time.time()
+                st.session_state.persisted_emerg = st.session_state.emergency_lanes
             st.session_state.collisions      = frame_out.get("collisions", [])
 
             # Update lane history for chart
@@ -665,30 +676,47 @@ with col_mid:
 
 # ── RIGHT: Alerts + event log ─────────────────────────────────────────────────
 with col_right:
-    # Active alerts
-    st.markdown('<p class="section-head">Active Alerts</p>', unsafe_allow_html=True)
+    # ── Emergency section ──
+    st.markdown('<p class="section-head">Emergency Dispatch</p>', unsafe_allow_html=True)
+    
+    # Persistence: show for 10 seconds after last detection
+    show_emerg = False
+    if st.session_state.persisted_emerg and (time.time() - st.session_state.last_emerg_time < 10):
+        show_emerg = True
 
-    emg = st.session_state.emergency_lanes
-    if emg:
-        for lane in emg:
+    if show_emerg:
+        for lane in st.session_state.persisted_emerg:
             st.markdown(
-                f'<div class="emergency-banner">🚨 EMERGENCY<br><b>{lane.replace("_"," ").upper()}</b></div>',
+                f'<div class="emergency-banner">🚨 EMERGENCY VEHICLE<br><b>{lane.replace("_"," ").upper()}</b></div>',
                 unsafe_allow_html=True
             )
+    else:
+        st.markdown(
+            '<div style="color:#2a3a4a;background:#0d131a;border:1px solid #1e293b;'
+            'border-radius:8px;padding:10px 14px;font-size:0.75rem;letter-spacing:1px;">NO ACTIVE EMERGENCY</div>',
+            unsafe_allow_html=True
+        )
 
-    cr = st.session_state.crash_report
-    if cr:
+    # ── Crash section ──
+    st.markdown('<p class="section-head">Crash Alerts</p>', unsafe_allow_html=True)
+    
+    # Persistence: show for 10 seconds after last detection
+    show_crash = False
+    cr = st.session_state.persisted_crash
+    if cr and (time.time() - st.session_state.last_crash_time < 10):
+        show_crash = True
+
+    if show_crash:
         st.markdown(
             f'<div class="alert-banner">💥 CRASH DETECTED<br>'
             f'Lane: <b>{cr["lane"]}</b><br>'
             f'Severity: <b>{cr["severity"].upper()}</b> | Score: <b>{cr["score"]}</b></div>',
             unsafe_allow_html=True
         )
-
-    if not emg and not cr:
+    else:
         st.markdown(
             '<div style="color:#1e3a2a;background:#0a1f15;border:1px solid #134924;'
-            'border-radius:8px;padding:10px 14px;font-size:0.75rem;letter-spacing:1px;">✓ ALL CLEAR</div>',
+            'border-radius:8px;padding:10px 14px;font-size:0.75rem;letter-spacing:1px;">✓ SYSTEM CLEAR</div>',
             unsafe_allow_html=True
         )
 
