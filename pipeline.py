@@ -140,6 +140,7 @@ def build_frame_output(
         "emergency_veh_ids":   all_emergency_vehicle_ids,
         "collisions":          collisions,
         "debug_frame":         debug_frame,
+        "raw_frame":           frame_bgr,
     }
 
 
