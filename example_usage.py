@@ -25,7 +25,12 @@ import cv2
 import os
 import json
 import numpy as np
+from dotenv import load_dotenv
 from pipeline import run_pipeline
+
+# Load environment variables
+load_dotenv()
+
 from preprocessing import CONFIG as DEFAULT_PREPROCESS_CONFIG
 from detector import DETECTOR_CONFIG
 from tracker import TRACKER_CONFIG
@@ -45,13 +50,14 @@ from data_logger import DataLogger
 # ═════════════════════════════════════════════════════════════════
 
 # Path to your folder of extracted video frames (JPG/PNG files)
-FRAMES_FOLDER = r"E:\photos" # ← Change this path
-
+# Now loaded from .env for security and portability
+# You can also set this directly if you prefer: FRAMES_FOLDER = r"E:\photos"
+FRAMES_FOLDER = os.getenv("FRAMES_FOLDER_PATH", r"E:\photos")
 # ── Preprocessing overrides ─────────────────
 PREPROCESS_CONFIG = {
     **DEFAULT_PREPROCESS_CONFIG,         # Start from defaults
-    "resize_width":  640,
-    "resize_height": 480,
+    "resize_width":  1280,
+    "resize_height": 720,
     "frame_skip":    3,                  # Process every 3rd frame
 
     # FIX 3: ROI disabled for top-down intersection camera — the whole
@@ -69,29 +75,28 @@ PREPROCESS_CONFIG = {
     # areas simultaneously. Set to False for daytime footage.
     "use_clahe":        True,
     "clahe_clip_limit": 2.0,             # Higher = more contrast, more noise risk
-    "clahe_tile_grid":  (8, 8),          # Tile size for 640x480 frames
+    "clahe_tile_grid":  (16, 16),          # Tile size for 1280x720 frames
 
     "use_background_subtraction": False, # Toggle MOG2 background subtraction
 }
 
 # ─ Lane boundaries ───────────────────────────────────────────────
 CUSTOM_LANE_CONFIG = {
-    "left_road": [
-        (0, 240), (240, 180), (220, 480), (0, 480)
-    ],
-
-    "bottom_road": [
-        (180, 280), (460, 280), (460, 480), (180, 480)
-    ],
-
-    "right_road": [
-        (420, 200), (640, 160), (640, 480), (420, 480)
-    ],
-
-    "top_road": [
-        (180, 0), (460, 0), (460, 260), (240, 180)
-    ],
+    "left_road": [(8,399),(397,256),(492,677),(7,692)],
+    "bottom_road": [(1083,411),(1269,635),(1277,714),(801,717)],
+    "right_road": [(1005,81),(1069,134),(1028,304),(784,164)],
+    "top_road": [(405,51),(466,40),(723,159),(455,209)]
 }
+
+# ─ Optional Global Shift ─────────────────────────────────────────
+# Change these if the camera has moved slightly and you need to 
+# shift all polygons together without re-mapping individual points.
+GLOBAL_SHIFT_X = 0
+GLOBAL_SHIFT_Y = 0
+
+if GLOBAL_SHIFT_X != 0 or GLOBAL_SHIFT_Y != 0:
+    for lane in CUSTOM_LANE_CONFIG:
+        CUSTOM_LANE_CONFIG[lane] = [(x + GLOBAL_SHIFT_X, y + GLOBAL_SHIFT_Y) for (x, y) in CUSTOM_LANE_CONFIG[lane]]
 
 # ─ Detector overrides ────────────────────────────────────────────
 CUSTOM_DETECTOR_CONFIG = {
@@ -408,7 +413,7 @@ def main():
             lane  = crash_report["lane"]
             print(f"  Frame {fid:>5} | [CRASH {sev}] score={score} "
                   f"lane={lane} signals={crash_report['signals']}")
-            alert_dispatcher.dispatch(crash_report, frame_output.get("debug_frame"))
+            alert_dispatcher.dispatch(crash_report, frame_output.get("raw_frame"))
 
         # ── Phase 2: Signal Control ───────────────────────────────────────
         # Only pass a collision to signal_controller when crash_detector

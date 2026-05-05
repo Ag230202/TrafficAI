@@ -43,15 +43,13 @@ from datetime import datetime
 COLLISION_CONFIG = {
     # Minimum bounding box overlap (Intersection over Union) to consider
     # two vehicles as physically occupying the same space.
-    # 0.0 = any overlap at all; 0.1 = 10% overlap required.
-    # Keep low (0.05–0.15) — at 640x480 even a real collision shows modest IoU.
-    "iou_threshold": 0.15,
+    # Lowered to 0.05 to catch glancing blows or crashes where bounding boxes barely touch.
+    "iou_threshold": 0.05,
 
     # Minimum closing speed in pixels/frame for both vehicles combined.
     # Filters out stationary neighbours and slow lane-merges.
-    # At frame_skip=3 and ~30fps, 1 frame ≈ 100ms, so 8px/frame ≈ ~2.9km/h
-    # at typical CCTV scale. Tune upward if parked cars trigger false positives.
-    "min_closing_speed": 15.0,
+    # Dropped to 5.0 to catch slow-speed crashes.
+    "min_closing_speed": 5.0,
 
     # Frames to suppress re-flagging the same vehicle pair after a collision.
     # At frame_skip=3 this is roughly: cooldown * 3 / 30 seconds.
@@ -342,7 +340,7 @@ class CollisionLogger:
 
             # Console output
             msg = (
-                f"[ACCIDENT] Frame {fid:>5} | "
+                f"[RAW_OVERLAP] Frame {fid:>5} | "
                 f"Vehicles {c['vehicle_a_id']}({c['vehicle_a_cls']}) "
                 f"& {c['vehicle_b_id']}({c['vehicle_b_cls']}) | "
                 f"Lane: {lane} | "

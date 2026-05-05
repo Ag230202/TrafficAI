@@ -55,16 +55,16 @@ import numpy as np
 
 CRASH_DETECTOR_CONFIG = {
     # ── Signal scores ──────────────────────────────────────────
-    "score_bbox_overlap":      40,   # IoU ≥ iou_threshold between 2 tracks
+    "score_bbox_overlap":      85,   # Increased so a single valid collision from CollisionDetector triggers probable
     "score_id_vanish":         35,   # 3+ IDs vanish from same lane at once
     "score_count_drop":        30,   # Lane count drops ≥ count_drop_threshold
     "score_direction_conflict": 25,  # Two vehicles heading toward each other
 
     # ── Thresholds ──────────────────────────────────────────────
-    "iou_threshold":           0.30, # Min IoU to count as overlap signal
-    "min_vanish_count":        3,    # Min IDs vanishing to score the signal
+    "iou_threshold":           0.05, # Lowered from 0.30 so ANY contact generates score
+    "min_vanish_count":        4,    # Min IDs vanishing to score the signal
     "count_drop_threshold":    3,    # Min vehicle count drop to score signal
-    "persistence_frames":      3,    # Frames score must stay above threshold
+    "persistence_frames":      2,    # Re-balanced to 2: catches real crashes before IDs vanish, but stops 1-frame jitter
 
     # ── Confidence bands ────────────────────────────────────────
     "threshold_possible":      50,   # Score ≥ 50: possible crash, log only
@@ -216,39 +216,40 @@ class CrashDetector:
         all_lanes = set(lane_counts.keys()) | set(self._prev_lane_counts.keys())
 
         for lane in all_lanes:
-            if lane == "unknown":
-                continue
-
             score = 0
             triggered_signals = []
             vehicle_ids_in_lane = {v["id"] for v in vehicles_by_lane.get(lane, [])}
 
-            # Signal 1: Bbox overlap IoU (from existing CollisionDetector output) +40
+            # Signal 1: Bbox overlap IoU (from existing CollisionDetector output) +85
             iou_score = self._check_bbox_overlap(collisions, lane)
             score += iou_score
             if iou_score > 0:
                 triggered_signals.append(f"iou+{iou_score}")
 
-            # Signal 2: ID cluster vanish +35
-            vanish_score = self._check_id_vanish(lane, vehicle_ids_in_lane)
-            score += vanish_score
-            if vanish_score > 0:
-                triggered_signals.append(f"vanish+{vanish_score}")
+            # For the "unknown" lane (vehicles outside polygons), we ONLY use the direct 
+            # physical overlap signal, because vanish/drop metrics are naturally very noisy 
+            # as vehicles enter/leave the screen.
+            if lane != "unknown":
+                # Signal 2: ID cluster vanish +35
+                vanish_score = self._check_id_vanish(lane, vehicle_ids_in_lane)
+                score += vanish_score
+                if vanish_score > 0:
+                    triggered_signals.append(f"vanish+{vanish_score}")
 
-            # Signal 3: Lane count drop +30
-            drop_score = self._check_count_drop(lane, lane_counts)
-            score += drop_score
-            if drop_score > 0:
-                triggered_signals.append(f"drop+{drop_score}")
+                # Signal 3: Lane count drop +30
+                drop_score = self._check_count_drop(lane, lane_counts)
+                score += drop_score
+                if drop_score > 0:
+                    triggered_signals.append(f"drop+{drop_score}")
 
-            # Signal 4: Direction conflict +25 (only after frame 3)
-            if self._frame_count >= self.cfg.get("min_frame_for_direction", 3):
-                dir_score = self._check_direction_conflict(
-                    vehicles_by_lane.get(lane, [])
-                )
-                score += dir_score
-                if dir_score > 0:
-                    triggered_signals.append(f"direction+{dir_score}")
+                # Signal 4: Direction conflict +25 (only after frame 3)
+                if self._frame_count >= self.cfg.get("min_frame_for_direction", 3):
+                    dir_score = self._check_direction_conflict(
+                        vehicles_by_lane.get(lane, [])
+                    )
+                    score += dir_score
+                    if dir_score > 0:
+                        triggered_signals.append(f"direction+{dir_score}")
 
             # ── Record score in rolling history ───────────────
             self._score_history[lane].append(score)
@@ -277,6 +278,13 @@ class CrashDetector:
 
                 # Only emit for confirmed/probable (≥ 80)
                 if score >= threshold_probable:
+                    # Try to find the bounding box of the collision to send a cropped image
+                    overlap_box = None
+                    for c in collisions:
+                        if c.get("lane") == lane or (lane == "unknown" and c.get("lane") is None):
+                            overlap_box = c.get("bbox_overlap")
+                            break
+                    
                     crash_report = self._build_crash_report(
                         lane=lane,
                         score=score,
@@ -284,6 +292,7 @@ class CrashDetector:
                         vehicle_ids=list(vehicle_ids_in_lane),
                         frame_id=frame_id,
                         signals=triggered_signals,
+                        overlap_box=overlap_box,
                     )
                     # Reset cooldown for this lane
                     self._cooldown[lane] = 0
@@ -399,6 +408,7 @@ class CrashDetector:
         vehicle_ids: list,
         frame_id: int,
         signals: list,
+        overlap_box: list = None,
     ) -> dict:
         """
         Assembles the crash_report dict returned to caller and passed to AlertDispatcher.
@@ -411,6 +421,7 @@ class CrashDetector:
             "frame_id":    frame_id,
             "timestamp":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "signals":     signals,     # Which signals contributed e.g. ["iou+40","drop+30"]
+            "overlap_box": overlap_box, # Bounding box of the crash [x1, y1, x2, y2]
         }
 
     # ──────────────────────────────────────────────────────────

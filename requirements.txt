@@ -19,3 +19,9 @@ torchvision>=0.15.0
 # Data analysis
 pandas>=1.0.0
 
+# Environment variables
+python-dotenv>=1.0.0
+
+# Dashboard dependencies
+streamlit>=1.27.0
+plotly>=5.14.0
