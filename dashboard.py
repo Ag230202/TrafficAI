@@ -207,7 +207,7 @@ st.markdown("""
   .log-entry.normal { color: #94a3b8; }
 
   /* Hide default streamlit chrome */
-  #MainMenu, footer { visibility: hidden; }
+  #MainMenu, footer, header { visibility: hidden; }
   .block-container { padding-top: 0 !important; }
 </style>
 """, unsafe_allow_html=True)
