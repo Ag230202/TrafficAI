@@ -523,235 +523,238 @@ with st.sidebar:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  HEADER
-# ─────────────────────────────────────────────────────────────────────────────
-status_dot   = "🟢" if st.session_state.running else ("🔴" if st.session_state.frames_processed > 0 else "⚪")
-status_label = "LIVE" if st.session_state.running else ("STOPPED" if st.session_state.frames_processed > 0 else "IDLE")
+@st.fragment(run_every=0.12)
+def render_dashboard_ui():
+    # ─── HEADER ─────────────────────────────────────────────────────────────
+    status_dot   = "🟢" if st.session_state.running else ("🔴" if st.session_state.frames_processed > 0 else "⚪")
+    status_label = "LIVE" if st.session_state.running else ("STOPPED" if st.session_state.frames_processed > 0 else "IDLE")
 
-st.markdown(f"""
-<div class="dash-header">
-  <div>
-    <p class="dash-title">🚦 Traffic Command Center</p>
-    <p class="dash-subtitle">AI-POWERED INTERSECTION ANALYSIS · PHASE 2 ACTIVE</p>
-  </div>
-  <div style="margin-left:auto; text-align:right; font-family:'JetBrains Mono',monospace; font-size:0.85rem; color:#475569;">
-    {status_dot} {status_label} &nbsp;|&nbsp; FPS: {st.session_state.current_fps:.1f} &nbsp;|&nbsp;
-    Frames: {st.session_state.frames_processed}
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  MAIN LAYOUT: video + metrics | charts | events
-# ─────────────────────────────────────────────────────────────────────────────
-col_left, col_mid, col_right = st.columns([2.2, 1.6, 1.2])
-
-# ── LEFT: Video feed ─────────────────────────────────────────────────────────
-with col_left:
-    st.markdown('<p class="section-head">Live Feed</p>', unsafe_allow_html=True)
-    video_placeholder = st.empty()
-
-    if st.session_state.frame_rgb is not None:
-        video_placeholder.image(st.session_state.frame_rgb, width="stretch", channels="RGB")
-    else:
-        video_placeholder.markdown(
-            '<div style="background:#0d1320;border:1px dashed #1e293b;border-radius:8px;'
-            'height:340px;display:flex;align-items:center;justify-content:center;'
-            'color:#334155;font-size:0.85rem;letter-spacing:2px;">NO SIGNAL</div>',
-            unsafe_allow_html=True
-        )
-
-    # ── Signal state under video ─────────────────────────────────────────
-    st.markdown('<p class="section-head">Signal State</p>', unsafe_allow_html=True)
-    sig = st.session_state.signal_output
-    if sig:
-        phase_info = f"Phase {sig['phase_id']} — {sig['phase_name']} | {sig['green_duration']}s green | elapsed {sig['elapsed_in_phase']:.1f}s"
-        st.markdown(f'<div style="font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#475569;margin-bottom:8px;">{phase_info}</div>', unsafe_allow_html=True)
-
-        pills = ""
-        for lane in ["top_road", "bottom_road", "left_road", "right_road"]:
-            short = lane.replace("_road", "").upper()
-            if lane in sig.get("active_lanes", []):
-                pills += f'<span class="signal-pill sig-green"><span class="sig-dot"></span>{short}</span>'
-            elif lane in sig.get("yellow_lanes", []):
-                pills += f'<span class="signal-pill sig-yellow"><span class="sig-dot"></span>{short}</span>'
-            else:
-                pills += f'<span class="signal-pill sig-red"><span class="sig-dot"></span>{short}</span>'
-
-        override = sig.get("override_reason", "")
-        if override and "standard" not in override:
-            pills += f'<span style="font-family:JetBrains Mono;font-size:0.65rem;color:#f97316;margin-left:10px;">⚠ {override.upper()}</span>'
-
-        st.markdown(f'<div class="signal-row">{pills}</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div style="color:#334155;font-size:0.8rem;text-align:center;padding:12px;">Signal controller offline</div>', unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="dash-header">
+      <div>
+        <p class="dash-title">🚦 Traffic Command Center</p>
+        <p class="dash-subtitle">AI-POWERED INTERSECTION ANALYSIS · PHASE 2 ACTIVE</p>
+      </div>
+      <div style="margin-left:auto; text-align:right; font-family:'JetBrains Mono',monospace; font-size:0.85rem; color:#475569;">
+        {status_dot} {status_label} &nbsp;|&nbsp; FPS: {st.session_state.current_fps:.1f} &nbsp;|&nbsp;
+        Frames: {st.session_state.frames_processed}
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
-# ── MIDDLE: Stats + charts ────────────────────────────────────────────────────
-with col_mid:
-    # Metric cards
-    s = st.session_state.stats
-    m1, m2 = st.columns(2)
-    m3, m4 = st.columns(2)
+    # ─── MAIN LAYOUT: video + metrics | charts | events ───────────────────────
+    col_left, col_mid, col_right = st.columns([2.2, 1.6, 1.2])
 
-    def metric_card(val, label, accent="#00ffe0"):
-        return f"""<div class="metric-card" style="--accent:{accent}">
-          <div class="metric-val">{val}</div>
-          <div class="metric-label">{label}</div>
-        </div>"""
+    # ── LEFT: Video feed ─────────────────────────────────────────────────────────
+    with col_left:
+        # ── Signal state above video ─────────────────────────────────────────
+        st.markdown('<p class="section-head">Signal State</p>', unsafe_allow_html=True)
+        sig = st.session_state.signal_output
+        if sig:
+            phase_info = f"Phase {sig['phase_id']} — {sig['phase_name']} | {sig['green_duration']}s green | elapsed {sig['elapsed_in_phase']:.1f}s"
+            st.markdown(f'<div style="font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#475569;margin-bottom:8px;">{phase_info}</div>', unsafe_allow_html=True)
 
-    m1.markdown(metric_card(s["total_frames"], "FRAMES"), unsafe_allow_html=True)
-    m2.markdown(metric_card(s["total_vehicles"], "VEHICLES", "#818cf8"), unsafe_allow_html=True)
-    m3.markdown(metric_card(s["total_collisions"], "CRASHES", "#ef4444"), unsafe_allow_html=True)
-    m4.markdown(metric_card(s["total_emergency"], "EMERGENCY", "#f97316"), unsafe_allow_html=True)
+            pills = ""
+            for lane in ["top_road", "bottom_road", "left_road", "right_road"]:
+                short = lane.replace("_road", "").upper()
+                if lane in sig.get("active_lanes", []):
+                    pills += f'<span class="signal-pill sig-green"><span class="sig-dot"></span>{short}</span>'
+                elif lane in sig.get("yellow_lanes", []):
+                    pills += f'<span class="signal-pill sig-yellow"><span class="sig-dot"></span>{short}</span>'
+                else:
+                    pills += f'<span class="signal-pill sig-red"><span class="sig-dot"></span>{short}</span>'
 
-    # Lane counts bar
-    st.markdown('<p class="section-head">Live Lane Density</p>', unsafe_allow_html=True)
-    lc  = st.session_state.lane_counts
-    lanes_display = ["top_road", "bottom_road", "left_road", "right_road"]
-    bar_colors    = ["#00ffe0", "#818cf8", "#f97316", "#f43f5e"]
+            override = sig.get("override_reason", "")
+            if override and "standard" not in override:
+                pills += f'<span style="font-family:JetBrains Mono;font-size:0.65rem;color:#f97316;margin-left:10px;">⚠ {override.upper()}</span>'
 
-    fig_bar = go.Figure()
-    fig_bar.add_trace(go.Bar(
-        x=[l.replace("_road","").upper() for l in lanes_display],
-        y=[lc.get(l, 0) for l in lanes_display],
-        marker_color=bar_colors,
-        marker_line_width=0,
-    ))
-    fig_bar.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=0, r=0, t=4, b=4), height=160,
-        font=dict(family="JetBrains Mono", color="#64748b", size=10),
-        xaxis=dict(showgrid=False, color="#475569"),
-        yaxis=dict(showgrid=True, gridcolor="#1e293b", color="#475569", dtick=1),
-    )
-    st.plotly_chart(fig_bar, width="stretch", config={"displayModeBar": False})
+            st.markdown(f'<div class="signal-row">{pills}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div style="color:#334155;font-size:0.8rem;text-align:center;padding:12px;">Signal controller offline</div>', unsafe_allow_html=True)
 
-    # Rolling count history (sparklines per lane)
-    st.markdown('<p class="section-head">Count History</p>', unsafe_allow_html=True)
-    hist = st.session_state.count_history
-    fig_line = go.Figure()
-    for lane, color in zip(lanes_display, bar_colors):
-        data = list(hist.get(lane, []))
-        if data:
-            fig_line.add_trace(go.Scatter(
-                y=data, mode="lines", name=lane.replace("_road","").upper(),
-                line=dict(color=color, width=1.5),
-                fill="tozeroy", fillcolor=color.replace(")", ",0.06)").replace("rgb","rgba") if color.startswith("rgb") else f"rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.06)",
-            ))
-    fig_line.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=0, r=0, t=4, b=4), height=160,
-        font=dict(family="JetBrains Mono", color="#64748b", size=10),
-        xaxis=dict(showgrid=False, color="#475569", title=""),
-        yaxis=dict(showgrid=True, gridcolor="#1e293b", color="#475569"),
-        legend=dict(orientation="h", y=-0.2, font=dict(size=9)),
-        showlegend=True,
-    )
-    st.plotly_chart(fig_line, width="stretch", config={"displayModeBar": False})
+        st.markdown('<div style="margin-top:20px;"></div>', unsafe_allow_html=True) # spacer
 
-    # Direction distribution
-    st.markdown('<p class="section-head">Direction Distribution</p>', unsafe_allow_html=True)
-    dirs = s["direction_counts"]
-    if dirs:
-        dir_labels = list(dirs.keys())
-        dir_vals   = [dirs[d] for d in dir_labels]
-        dir_colors = ["#00ffe0","#818cf8","#f97316","#f43f5e","#4ade80","#60a5fa"]
-        fig_pie = go.Figure(go.Pie(
-            labels=dir_labels, values=dir_vals,
-            hole=0.6,
-            marker=dict(colors=dir_colors[:len(dir_labels)]),
-            textfont=dict(family="JetBrains Mono", size=9, color="#fff"),
-        ))
-        fig_pie.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0,r=0,t=0,b=0), height=140,
-            legend=dict(orientation="h", font=dict(size=8, color="#64748b"), y=-0.1),
-            showlegend=True,
-        )
-        st.plotly_chart(fig_pie, width="stretch", config={"displayModeBar": False})
-    else:
-        st.markdown('<div style="color:#334155;font-size:0.75rem;text-align:center;padding:12px;">Waiting for data…</div>', unsafe_allow_html=True)
-
-
-# ── RIGHT: Alerts + event log ─────────────────────────────────────────────────
-with col_right:
-    # ── Emergency section ──
-    st.markdown('<p class="section-head">Emergency Dispatch</p>', unsafe_allow_html=True)
-    
-    # Persistence: show for 10 seconds after last detection
-    show_emerg = False
-    if st.session_state.persisted_emerg and (time.time() - st.session_state.last_emerg_time < 10):
-        show_emerg = True
-
-    if show_emerg:
-        for lane in st.session_state.persisted_emerg:
+        st.markdown('<p class="section-head">Live Feed</p>', unsafe_allow_html=True)
+        if st.session_state.frame_rgb is not None:
+            st.image(st.session_state.frame_rgb, width="stretch", channels="RGB")
+        elif st.session_state.running:
             st.markdown(
-                f'<div class="emergency-banner">🚨 EMERGENCY VEHICLE<br><b>{lane.replace("_"," ").upper()}</b></div>',
+                '<div style="width:100%; aspect-ratio:16/9; background:#0d1320;border:1px dashed #1e293b;border-radius:8px;'
+                'display:flex;align-items:center;justify-content:center;'
+                'color:#00ffe0;font-size:0.85rem;letter-spacing:2px;font-family:\'JetBrains Mono\',monospace;">'
+                'LOADING LIVE FEED...</div>',
                 unsafe_allow_html=True
             )
-    else:
-        st.markdown(
-            '<div style="color:#2a3a4a;background:#0d131a;border:1px solid #1e293b;'
-            'border-radius:8px;padding:10px 14px;font-size:0.75rem;letter-spacing:1px;">NO ACTIVE EMERGENCY</div>',
-            unsafe_allow_html=True
+        else:
+            st.markdown(
+                '<div style="width:100%; aspect-ratio:16/9; background:#0d1320;border:1px dashed #1e293b;border-radius:8px;'
+                'display:flex;align-items:center;justify-content:center;'
+                'color:#334155;font-size:0.85rem;letter-spacing:2px;">NO SIGNAL</div>',
+                unsafe_allow_html=True
+            )
+
+
+    # ── MIDDLE: Stats + charts ────────────────────────────────────────────────────
+    with col_mid:
+        # Metric cards
+        s = st.session_state.stats
+        m1, m2 = st.columns(2)
+        m3, m4 = st.columns(2)
+
+        def metric_card(val, label, accent="#00ffe0"):
+            return f"""<div class="metric-card" style="--accent:{accent}">
+              <div class="metric-val">{val}</div>
+              <div class="metric-label">{label}</div>
+            </div>"""
+
+        m1.markdown(metric_card(s["total_frames"], "FRAMES"), unsafe_allow_html=True)
+        m2.markdown(metric_card(s["total_vehicles"], "VEHICLES", "#818cf8"), unsafe_allow_html=True)
+        m3.markdown(metric_card(s["total_collisions"], "CRASHES", "#ef4444"), unsafe_allow_html=True)
+        m4.markdown(metric_card(s["total_emergency"], "EMERGENCY", "#f97316"), unsafe_allow_html=True)
+
+        # Lane counts bar
+        st.markdown('<p class="section-head">Live Lane Density</p>', unsafe_allow_html=True)
+        lc  = st.session_state.lane_counts
+        lanes_display = ["top_road", "bottom_road", "left_road", "right_road"]
+        bar_colors    = ["#00ffe0", "#818cf8", "#f97316", "#f43f5e"]
+
+        fig_bar = go.Figure()
+        fig_bar.add_trace(go.Bar(
+            x=[l.replace("_road","").upper() for l in lanes_display],
+            y=[lc.get(l, 0) for l in lanes_display],
+            marker_color=bar_colors,
+            marker_line_width=0,
+        ))
+        fig_bar.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=0, r=0, t=4, b=4), height=160,
+            font=dict(family="JetBrains Mono", color="#64748b", size=10),
+            xaxis=dict(showgrid=False, color="#475569"),
+            yaxis=dict(showgrid=True, gridcolor="#1e293b", color="#475569", dtick=1),
         )
+        st.plotly_chart(fig_bar, width="stretch", config={"displayModeBar": False})
 
-    # ── Crash section ──
-    st.markdown('<p class="section-head">Crash Alerts</p>', unsafe_allow_html=True)
-    
-    # Persistence: show for 10 seconds after last detection
-    show_crash = False
-    cr = st.session_state.persisted_crash
-    if cr and (time.time() - st.session_state.last_crash_time < 10):
-        show_crash = True
-
-    if show_crash:
-        st.markdown(
-            f'<div class="alert-banner">💥 CRASH DETECTED<br>'
-            f'Lane: <b>{cr["lane"]}</b><br>'
-            f'Severity: <b>{cr["severity"].upper()}</b> | Score: <b>{cr["score"]}</b></div>',
-            unsafe_allow_html=True
+        # Rolling count history (sparklines per lane)
+        st.markdown('<p class="section-head">Count History</p>', unsafe_allow_html=True)
+        hist = st.session_state.count_history
+        fig_line = go.Figure()
+        for lane, color in zip(lanes_display, bar_colors):
+            data = list(hist.get(lane, []))
+            if data:
+                fig_line.add_trace(go.Scatter(
+                    y=data, mode="lines", name=lane.replace("_road","").upper(),
+                    line=dict(color=color, width=1.5),
+                    fill="tozeroy", fillcolor=color.replace(")", ",0.06)").replace("rgb","rgba") if color.startswith("rgb") else f"rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.06)",
+                ))
+        fig_line.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=0, r=0, t=4, b=4), height=160,
+            font=dict(family="JetBrains Mono", color="#64748b", size=10),
+            xaxis=dict(showgrid=False, color="#475569", title=""),
+            yaxis=dict(showgrid=True, gridcolor="#1e293b", color="#475569"),
+            legend=dict(orientation="h", y=-0.2, font=dict(size=9)),
+            showlegend=True,
         )
-    else:
-        st.markdown(
-            '<div style="color:#1e3a2a;background:#0a1f15;border:1px solid #134924;'
-            'border-radius:8px;padding:10px 14px;font-size:0.75rem;letter-spacing:1px;">✓ SYSTEM CLEAR</div>',
-            unsafe_allow_html=True
-        )
+        st.plotly_chart(fig_line, width="stretch", config={"displayModeBar": False})
 
-    # Current lane counts list
-    st.markdown('<p class="section-head">Lane Vehicles</p>', unsafe_allow_html=True)
-    lc = st.session_state.lane_counts
-    for lane in ["top_road", "bottom_road", "left_road", "right_road"]:
-        cnt = lc.get(lane, 0)
-        bar_w = min(cnt * 18, 100)
-        color = "#ef4444" if cnt >= 6 else ("#f97316" if cnt >= 3 else "#00ffe0")
-        st.markdown(f"""
-        <div style="margin:4px 0;">
-          <div style="font-size:0.65rem;letter-spacing:1px;color:#475569;text-transform:uppercase;">{lane.replace("_"," ")}</div>
-          <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
-            <div style="height:6px;width:{bar_w}%;background:{color};border-radius:4px;transition:width 0.3s;"></div>
-            <span style="font-family:'JetBrains Mono',monospace;font-size:0.8rem;color:{color};font-weight:700;">{cnt}</span>
-          </div>
-        </div>""", unsafe_allow_html=True)
-
-    # Event log
-    st.markdown('<p class="section-head">Event Log</p>', unsafe_allow_html=True)
-    log_html = '<div style="max-height:280px;overflow-y:auto;">'
-    for ev in list(st.session_state.event_log)[:25]:
-        css_cls = ev["type"]
-        icon    = "💥" if ev["type"] == "crash" else ("🚨" if ev["type"] == "emerg" else "·")
-        log_html += f'<div class="log-entry {css_cls}">[{ev["ts"]}] {icon} {ev["msg"]}</div>'
-    log_html += '</div>'
-    if not st.session_state.event_log:
-        log_html = '<div style="color:#1e293b;font-size:0.72rem;text-align:center;padding:8px;">No events yet</div>'
-    st.markdown(log_html, unsafe_allow_html=True)
+        # Direction distribution
+        st.markdown('<p class="section-head">Direction Distribution</p>', unsafe_allow_html=True)
+        dirs = s["direction_counts"]
+        if dirs:
+            dir_labels = list(dirs.keys())
+            dir_vals   = [dirs[d] for d in dir_labels]
+            dir_colors = ["#00ffe0","#818cf8","#f97316","#f43f5e","#4ade80","#60a5fa"]
+            fig_pie = go.Figure(go.Pie(
+                labels=dir_labels, values=dir_vals,
+                hole=0.6,
+                marker=dict(colors=dir_colors[:len(dir_labels)]),
+                textfont=dict(family="JetBrains Mono", size=9, color="#fff"),
+            ))
+            fig_pie.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0,r=0,t=0,b=0), height=140,
+                legend=dict(orientation="h", font=dict(size=8, color="#64748b"), y=-0.1),
+                showlegend=True,
+            )
+            st.plotly_chart(fig_pie, width="stretch", config={"displayModeBar": False})
+        else:
+            st.markdown('<div style="color:#334155;font-size:0.75rem;text-align:center;padding:12px;">Waiting for data…</div>', unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  AUTO-REFRESH while pipeline is running
-# ─────────────────────────────────────────────────────────────────────────────
-if st.session_state.running:
-    time.sleep(0.12)   # ~8 UI refreshes / second
-    st.rerun()
+    # ── RIGHT: Alerts + event log ─────────────────────────────────────────────────
+    with col_right:
+        # ── Emergency section ──
+        st.markdown('<p class="section-head">Emergency Dispatch</p>', unsafe_allow_html=True)
+        
+        # Persistence: show for 10 seconds after last detection
+        show_emerg = False
+        if st.session_state.persisted_emerg and (time.time() - st.session_state.last_emerg_time < 10):
+            show_emerg = True
+
+        if show_emerg:
+            for lane in st.session_state.persisted_emerg:
+                st.markdown(
+                    f'<div class="emergency-banner">🚨 EMERGENCY VEHICLE<br><b>{lane.replace("_"," ").upper()}</b></div>',
+                    unsafe_allow_html=True
+                )
+        else:
+            st.markdown(
+                '<div style="color:#2a3a4a;background:#0d131a;border:1px solid #1e293b;'
+                'border-radius:8px;padding:10px 14px;font-size:0.75rem;letter-spacing:1px;">NO ACTIVE EMERGENCY</div>',
+                unsafe_allow_html=True
+            )
+
+        # ── Crash section ──
+        st.markdown('<p class="section-head">Crash Alerts</p>', unsafe_allow_html=True)
+        
+        # Persistence: show for 10 seconds after last detection
+        show_crash = False
+        cr = st.session_state.persisted_crash
+        if cr and (time.time() - st.session_state.last_crash_time < 10):
+            show_crash = True
+
+        if show_crash:
+            st.markdown(
+                f'<div class="alert-banner">💥 CRASH DETECTED<br>'
+                f'Lane: <b>{cr["lane"]}</b><br>'
+                f'Severity: <b>{cr["severity"].upper()}</b> | Score: <b>{cr["score"]}</b></div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div style="color:#1e3a2a;background:#0a1f15;border:1px solid #134924;'
+                'border-radius:8px;padding:10px 14px;font-size:0.75rem;letter-spacing:1px;">✓ SYSTEM CLEAR</div>',
+                unsafe_allow_html=True
+            )
+
+        # Current lane counts list
+        st.markdown('<p class="section-head">Lane Vehicles</p>', unsafe_allow_html=True)
+        lc = st.session_state.lane_counts
+        for lane in ["top_road", "bottom_road", "left_road", "right_road"]:
+            cnt = lc.get(lane, 0)
+            bar_w = min(cnt * 18, 100)
+            color = "#ef4444" if cnt >= 6 else ("#f97316" if cnt >= 3 else "#00ffe0")
+            st.markdown(f"""
+            <div style="margin:4px 0;">
+              <div style="font-size:0.65rem;letter-spacing:1px;color:#475569;text-transform:uppercase;">{lane.replace("_"," ")}</div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
+                <div style="height:6px;width:{bar_w}%;background:{color};border-radius:4px;transition:width 0.3s;"></div>
+                <span style="font-family:\'JetBrains Mono\',monospace;font-size:0.8rem;color:{color};font-weight:700;">{cnt}</span>
+              </div>
+            </div>""", unsafe_allow_html=True)
+
+        # Event log
+        st.markdown('<p class="section-head">Event Log</p>', unsafe_allow_html=True)
+        log_html = '<div style="max-height:280px;overflow-y:auto;">'
+        for ev in list(st.session_state.event_log)[:25]:
+            css_cls = ev["type"]
+            icon    = "💥" if ev["type"] == "crash" else ("🚨" if ev["type"] == "emerg" else "·")
+            log_html += f'<div class="log-entry {css_cls}">[{ev["ts"]}] {icon} {ev["msg"]}</div>'
+        log_html += '</div>'
+        if not st.session_state.event_log:
+            log_html = '<div style="color:#1e293b;font-size:0.72rem;text-align:center;padding:8px;">No events yet</div>'
+        st.markdown(log_html, unsafe_allow_html=True)
+
+
+# ─── EXECUTE DASHBOARD ──────────────────────────────────────────────────────
+render_dashboard_ui()
