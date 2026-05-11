@@ -134,15 +134,31 @@ class DataLogger:
         # ── Action = current phase id (0-3) ──────────────────
         action = current_phase
 
-        # ── Reward = -(vehicles not served this frame) ───────
-        # Vehicles in non-active lanes are "waiting"
+        # ── Step 3: Retrain without Emergency Bias ───────────
+        # If this frame was driven by an emergency override, DO NOT log it.
+        # This prevents the AI from learning that it "chose" to keep a lane green 
+        # when it was actually forced to by an ambulance.
+        if signal_output and getattr(signal_output, "override_reason", None) == "emergency_preemption":
+            return
+
+        # ── Step 2: Balance the AI (Reward Weighting) ────────
+        # Reward = -(vehicles not served + heavy starvation penalty)
+        starvation_penalty = 0
+        waiting_count = 0
+        
         if signal_output and signal_output.active_lanes:
-            served_count  = sum(lane_counts.get(l, 0) for l in signal_output.active_lanes)
-            waiting_count = sum(lane_counts.values()) - served_count
+            for i, lane in enumerate(self._lanes):
+                count = lane_counts.get(lane, 0)
+                if lane not in signal_output.active_lanes:
+                    waiting_count += count
+                    # Add exponential penalty for lanes waiting multiple cycles
+                    wait_cycles = waits[i]
+                    starvation_penalty += (count * (wait_cycles ** 2))
         else:
             waiting_count = sum(lane_counts.values())
 
-        reward = -float(waiting_count)
+        # The reward heavily penalizes starving a busy lane
+        reward = -float(waiting_count + starvation_penalty)
 
         # ── Write row ────────────────────────────────────────
         row = {
