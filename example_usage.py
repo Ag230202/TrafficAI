@@ -82,10 +82,10 @@ PREPROCESS_CONFIG = {
 
 # ─ Lane boundaries ───────────────────────────────────────────────
 CUSTOM_LANE_CONFIG = {
-    "left_road": [(8,399),(397,256),(492,677),(7,692)],
-    "bottom_road": [(1083,411),(1269,635),(1277,714),(801,717)],
-    "right_road": [(1005,81),(1069,134),(1028,304),(784,164)],
-    "top_road": [(405,51),(466,40),(723,159),(455,209)]
+    "left_road": [(0, 356), (465, 156), (598, 720), (0, 720)],
+    "bottom_road": [(1073, 327), (1280, 641), (1280, 720), (678, 720)],
+    "right_road": [(1018, 45), (1108, 119), (1050, 357), (709, 161)],
+    "top_road": [(362, 25), (447, 10), (807, 176), (432, 246)]
 }
 
 # ─ Optional Global Shift ─────────────────────────────────────────
@@ -329,9 +329,10 @@ def draw_signal_state(debug_frame, signal_output, lane_mapper):
         )
     
     # Draw overall phase info at top
+    alloc_prefix = "AI ALLOCATED" if signal_output.override_reason == "dqn_agent" else "Adaptive"
     phase_info = (
         f"Phase {signal_output.phase_id}: {signal_output.phase_name} | "
-        f"Green: {signal_output.green_duration}s | "
+        f"{alloc_prefix} Green: {signal_output.green_duration}s | "
         f"Elapsed: {signal_output.elapsed_in_phase:.1f}s"
     )
     
