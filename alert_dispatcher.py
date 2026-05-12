@@ -54,7 +54,7 @@ ALERT_CONFIG = {
     "log_csv": "alerts_log.csv",
 
     # ── TELEGRAM BOT CONFIGURATION ──
-    "telegram_enabled": True,  # Set to True to enable Telegram alerts
+    "telegram_enabled": os.getenv("TELEGRAM_ENABLED", "True").lower() in ("true", "1", "t"),
     "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN", ""),
     "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", ""),
 

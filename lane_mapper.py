@@ -39,10 +39,10 @@ import numpy as np
 
 # Coordinates are for resized frame 1280x720
 LANE_CONFIG = {
-    "left_road": [(8,399),(397,256),(492,677),(7,692)],
-    "bottom_road": [(1083,411),(1269,635),(1277,714),(801,717)],
-    "right_road": [(1005,81),(1069,134),(1028,304),(784,164)],
-    "top_road": [(405,51),(466,40),(723,159),(455,209)]
+    "left_road": [(42, 660), (38, 392), (407, 274), (499, 646)],
+    "bottom_road": [(1073, 327), (1280, 641), (1280, 720), (678, 720)],
+    "right_road": [(1018, 45), (1108, 119), (1050, 357), (709, 161)],
+    "top_road": [(362, 25), (447, 10), (807, 176), (432, 246)]
 }
 
 # Optional global shift if camera moved
@@ -56,6 +56,8 @@ if GLOBAL_SHIFT_X != 0 or GLOBAL_SHIFT_Y != 0:
 EMERGENCY_CLASSES = {"ambulance", "fire truck", "firetruck", "fire_truck"}
 EMERGENCY_BBOX_AREA_THRESHOLD = 18000
 EMERGENCY_SPEED_THRESHOLD = 10
+MIN_LANE_VEHICLE_AREA = 2500
+
 
 
 class LaneMapper:
@@ -90,6 +92,10 @@ class LaneMapper:
     def count_vehicles_per_lane(self, vehicle_list: list) -> dict:
         counts = {lane: 0 for lane in self.lanes}
         for vehicle in vehicle_list:
+            bbox = vehicle.get("bbox")
+            if bbox and self._bbox_area(bbox) < MIN_LANE_VEHICLE_AREA:
+                continue  # Skip distant background vehicles
+
             # FIX (Bug 3): no default — None (out-of-polygon) must not
             # accidentally match a real lane name string.
             lane = vehicle.get("lane")

@@ -82,7 +82,7 @@ PREPROCESS_CONFIG = {
 
 # ─ Lane boundaries ───────────────────────────────────────────────
 CUSTOM_LANE_CONFIG = {
-    "left_road": [(0, 356), (465, 156), (598, 720), (0, 720)],
+    "left_road": [(42, 660), (38, 392), (407, 274), (499, 646)],
     "bottom_road": [(1073, 327), (1280, 641), (1280, 720), (678, 720)],
     "right_road": [(1018, 45), (1108, 119), (1050, 357), (709, 161)],
     "top_road": [(362, 25), (447, 10), (807, 176), (432, 246)]
@@ -171,6 +171,11 @@ class PipelineSummary:
         self.lane_totals           = {}   # cumulative vehicle counts per lane
         self.direction_counts      = {}   # direction → count
 
+        # Unique vehicle tracking
+        self.seen_vehicle_ids      = set()
+        self.seen_in_lane          = {}
+        self.seen_in_direction     = {}
+
         # Emergency vehicle tracking
         self.total_emergency_detections = 0          # total emergency flags across all frames
         self.emergency_lane_counts      = {}         # lane → how many frames had emergency there
@@ -179,16 +184,32 @@ class PipelineSummary:
 
     def update(self, frame_output: dict):
         self.total_frames   += 1
-        self.total_vehicles += len(frame_output["vehicles"])
 
-        # Accumulate lane counts
-        for lane, count in frame_output["lane_counts"].items():
-            self.lane_totals[lane] = self.lane_totals.get(lane, 0) + count
-
-        # Accumulate direction counts
         for v in frame_output["vehicles"]:
+            vid = v.get("id")
+            if vid is None:
+                continue
+
+            # Unique global count
+            if vid not in self.seen_vehicle_ids:
+                self.seen_vehicle_ids.add(vid)
+                self.total_vehicles += 1
+
+            # Unique direction count
             d = v.get("direction", "unknown")
-            self.direction_counts[d] = self.direction_counts.get(d, 0) + 1
+            if d not in self.seen_in_direction:
+                self.seen_in_direction[d] = set()
+            if vid not in self.seen_in_direction[d]:
+                self.seen_in_direction[d].add(vid)
+                self.direction_counts[d] = self.direction_counts.get(d, 0) + 1
+
+            # Unique lane count
+            lane = v.get("lane", "unknown")
+            if lane not in self.seen_in_lane:
+                self.seen_in_lane[lane] = set()
+            if vid not in self.seen_in_lane[lane]:
+                self.seen_in_lane[lane].add(vid)
+                self.lane_totals[lane] = self.lane_totals.get(lane, 0) + 1
 
         # ── Emergency vehicle tracking ───────────────────────────────
         emerg_lanes = frame_output.get("emergency_lane", [])
