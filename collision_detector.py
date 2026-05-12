@@ -43,18 +43,22 @@ from datetime import datetime
 COLLISION_CONFIG = {
     # Minimum bounding box overlap (Intersection over Union) to consider
     # two vehicles as physically occupying the same space.
-    # Lowered to 0.05 to catch glancing blows or crashes where bounding boxes barely touch.
-    "iou_threshold": 0.05,
+    # Increased to 0.55 to prevent false positives from vehicles passing each other in opposite directions.
+    "iou_threshold": 0.55,
 
     # Minimum closing speed in pixels/frame for both vehicles combined.
     # Filters out stationary neighbours and slow lane-merges.
     # Dropped to 5.0 to catch slow-speed crashes.
-    "min_closing_speed": 5.0,
+    "min_closing_speed": 15.0,
 
     # Frames to suppress re-flagging the same vehicle pair after a collision.
     # At frame_skip=3 this is roughly: cooldown * 3 / 30 seconds.
     # Default 10 → suppresses for ~1 second of real video.
     "collision_cooldown_frames": 10,
+
+    # Minimum bounding box area in pixels to consider as a valid vehicle.
+    # Filters out small debris resulting from collisions.
+    "min_bbox_area": 1500,
 
     # Draw collision markers on the debug frame.
     "draw_debug": True,
@@ -175,7 +179,18 @@ class CollisionDetector:
         iou_thresh = cfg["iou_threshold"]
         min_speed  = cfg["min_closing_speed"]
         cooldown   = cfg["collision_cooldown_frames"]
+        min_area   = cfg.get("min_bbox_area", 1500)
         collisions = []
+
+        # Filter out small pieces (debris) to avoid false collisions
+        valid_vehicles = []
+        for v in vehicles:
+            x1, y1, x2, y2 = v["bbox"]
+            area = max(0, x2 - x1) * max(0, y2 - y1)
+            if area >= min_area:
+                valid_vehicles.append(v)
+        
+        vehicles = valid_vehicles
 
         # Need at least 2 vehicles to have a collision
         if len(vehicles) < 2:

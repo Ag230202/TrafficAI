@@ -38,7 +38,7 @@ EMERGENCY_LIGHT_CONFIG = {
     # Minimum blob area in pixels to be considered a vehicle light source
     # (not a small traffic light or reflection)
     # FIX: raised from 400 → 800
-    "min_blob_area": 800,
+    "min_blob_area": 2000,
 
     # Maximum blob area — very large blobs are likely ROI artefacts
     "max_blob_area": 80000,
@@ -54,12 +54,12 @@ EMERGENCY_LIGHT_CONFIG = {
     # only the intense, near-white-hot flashes of actual emergency lights.
     "color_ranges": {
         # Red — fire trucks, ambulances, police (red wraps around hue)
-        "red_low":  {"lower": (0,   180, 200), "upper": (10,  255, 255)},
-        "red_high": {"lower": (165, 180, 200), "upper": (179, 255, 255)},
+        "red_low":  {"lower": (0,   220, 220), "upper": (10,  255, 255)},
+        "red_high": {"lower": (165, 220, 220), "upper": (179, 255, 255)},
         # Blue — police lights
-        "blue":     {"lower": (100, 180, 200), "upper": (130, 255, 255)},
+        "blue":     {"lower": (100, 220, 220), "upper": (130, 255, 255)},
         # Amber/orange — ambulance, roadwork, some fire trucks
-        "amber":    {"lower": (10,  180, 200), "upper": (25,  255, 255)},
+        "amber":    {"lower": (10,  220, 220), "upper": (25,  255, 255)},
     },
 
     # Minimum number of active colour pixels INSIDE a blob's bounding box.
@@ -67,7 +67,7 @@ EMERGENCY_LIGHT_CONFIG = {
     # This rejects blobs whose bounding box area passes the size check but
     # whose interior is mostly dark — e.g. a large vehicle silhouette with
     # only a few bright pixels on its edge.
-    "min_color_pixels": 500,
+    "min_color_pixels": 1500,
 
     # Whether to draw debug blobs on the debug frame
     "draw_debug": True,

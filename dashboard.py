@@ -233,6 +233,9 @@ def _init_state():
             "total_emergency":  0,
             "direction_counts": {},
             "lane_totals":      {},
+            "seen_vehicle_ids": set(),
+            "seen_in_lane":     {},
+            "seen_in_direction":{},
         },
         "event_log":        deque(maxlen=60),
         "count_history":    defaultdict(lambda: deque(maxlen=80)),
@@ -397,7 +400,7 @@ def pipeline_thread(source_path: str, config: dict):
             crash_report = crash_det.update(frame_out)
             is_new_crash = False
             if crash_report:
-                is_new_crash = alert_disp.dispatch(crash_report, frame_out.get("debug_frame"))
+                is_new_crash = alert_disp.dispatch(crash_report, frame_rgb)
 
             # Signal control
             gated_collisions = [{"lane": crash_report["lane"]}] if crash_report else []
@@ -410,7 +413,7 @@ def pipeline_thread(source_path: str, config: dict):
 
             # FPS calc
             t_now = time.time()
-            fps   = 1.0 / max(t_now - t_prev, 1e-6)
+            fps   = (1.0 / max(t_now - t_prev, 1e-6)) * frame_skip
             t_prev = t_now
             st.session_state.fps_deque.append(fps)
             st.session_state.current_fps = sum(st.session_state.fps_deque) / len(st.session_state.fps_deque)
@@ -440,16 +443,33 @@ def pipeline_thread(source_path: str, config: dict):
             # Stats
             s = st.session_state.stats
             s["total_frames"]   += 1
-            s["total_vehicles"] += len(frame_out["vehicles"])
             if is_new_crash:
                 s["total_collisions"] += 1
             if frame_out.get("emergency_lane"):
                 s["total_emergency"] += 1
+
             for v in frame_out["vehicles"]:
+                vid = v.get("id")
+                if vid is None:
+                    continue
+
+                if vid not in s["seen_vehicle_ids"]:
+                    s["seen_vehicle_ids"].add(vid)
+                    s["total_vehicles"] += 1
+
                 d = v.get("direction", "unknown")
-                s["direction_counts"][d] = s["direction_counts"].get(d, 0) + 1
-            for lane, cnt in frame_out["lane_counts"].items():
-                s["lane_totals"][lane] = s["lane_totals"].get(lane, 0) + cnt
+                if d not in s["seen_in_direction"]:
+                    s["seen_in_direction"][d] = set()
+                if vid not in s["seen_in_direction"][d]:
+                    s["seen_in_direction"][d].add(vid)
+                    s["direction_counts"][d] = s["direction_counts"].get(d, 0) + 1
+
+                lane = v.get("lane", "unknown")
+                if lane not in s["seen_in_lane"]:
+                    s["seen_in_lane"][lane] = set()
+                if vid not in s["seen_in_lane"][lane]:
+                    s["seen_in_lane"][lane].add(vid)
+                    s["lane_totals"][lane] = s["lane_totals"].get(lane, 0) + 1
 
             st.session_state.frames_processed = frame_index
 
@@ -491,7 +511,7 @@ with st.sidebar:
     st.markdown("### Detection")
     conf_thresh = st.slider("Confidence threshold", 0.05, 0.9, 0.15, 0.01)
     imgsz       = st.select_slider("Inference size", [640, 960, 1280], value=1280)
-    frame_skip  = st.slider("Frame skip", 1, 10, 3)
+    frame_skip  = st.slider("Frame skip", 1, 30, 30)
     use_clahe   = st.checkbox("CLAHE (night/low-light)", value=True)
 
     st.markdown("### AI Mode")
@@ -516,10 +536,12 @@ with st.sidebar:
                              args=(source_path, cfg), daemon=True)
         add_script_run_ctx(t)
         t.start()
+        st.rerun()
 
     if stop_btn:
         st.session_state.stop_flag = True
         st.session_state.running   = False
+        st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -727,21 +749,7 @@ def render_dashboard_ui():
                 unsafe_allow_html=True
             )
 
-        # Current lane counts list
-        st.markdown('<p class="section-head">Lane Vehicles</p>', unsafe_allow_html=True)
-        lc = st.session_state.lane_counts
-        for lane in ["top_road", "bottom_road", "left_road", "right_road"]:
-            cnt = lc.get(lane, 0)
-            bar_w = min(cnt * 18, 100)
-            color = "#ef4444" if cnt >= 6 else ("#f97316" if cnt >= 3 else "#00ffe0")
-            st.markdown(f"""
-            <div style="margin:4px 0;">
-              <div style="font-size:0.65rem;letter-spacing:1px;color:#475569;text-transform:uppercase;">{lane.replace("_"," ")}</div>
-              <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
-                <div style="height:6px;width:{bar_w}%;background:{color};border-radius:4px;transition:width 0.3s;"></div>
-                <span style="font-family:\'JetBrains Mono\',monospace;font-size:0.8rem;color:{color};font-weight:700;">{cnt}</span>
-              </div>
-            </div>""", unsafe_allow_html=True)
+
 
         # Event log
         st.markdown('<p class="section-head">Event Log</p>', unsafe_allow_html=True)

@@ -216,8 +216,8 @@ class CentroidTracker:
             del self.tracks[tid]
 
     def _get_active_tracks(self) -> list:
-        """Returns tracks that have been seen enough times to be reliable."""
-        return [t for t in self.tracks.values() if t.hits >= self.min_hits]
+        """Returns tracks that have been seen enough times to be reliable AND are visible in the current frame."""
+        return [t for t in self.tracks.values() if t.hits >= self.min_hits and t.lost_frames == 0]
 
     @staticmethod
     def _bbox_to_centroid(bbox: list) -> tuple:
