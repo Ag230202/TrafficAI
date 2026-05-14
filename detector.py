@@ -22,13 +22,14 @@ DETECTOR_CONFIG = {
     # Minimum confidence to keep a detection
     "confidence_threshold": 0.4,
 
-    # COCO class IDs to detect (vehicles only)
-    # 2=car, 3=motorcycle, 5=bus, 7=truck
-    # YOLOv8n does not include ambulance/fire truck in COCO,
-    # so those are handled separately via heuristics in lane_mapper.py
+    # 2=car, 3=motorcycle, 5=bus, 7=truck (Standard COCO)
+    # If using custom trained yolov8_emergency.pt, update these to match your dataset.yaml
+    # e.g., {0, 1, 2, 3, 4, 5} where 4=ambulance, 5=fire_truck
     "target_class_ids": {2, 3, 5, 7},
 
-    # Human-readable labels for each COCO class ID we care about
+    # Human-readable labels for each class ID we care about
+    # Update these if you train a custom model:
+    # 0: "car", 1: "motorcycle", 2: "bus", 3: "truck", 4: "ambulance", 5: "fire_truck"
     "class_labels": {
         2: "car",
         3: "motorcycle",
