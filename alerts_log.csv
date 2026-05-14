@@ -1,1 +1,2 @@
-timestamp,frame_id,lane,severity,score,vehicle_ids,signals,snapshot_path,http_sent
+timestamp,frame_id,lane,severity,score,vehicle_ids,signals,snapshot_path,telegram_sent
+2026-05-14 14:03:26,3417,right_road,confirmed,110,"[131, 135, 138, 83, 147, 151, 121, 90, 124]","[""iou+85"", ""direction+25""]",alerts\alert_14-03-26-742_right_road_score110.jpg,True
