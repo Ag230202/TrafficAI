@@ -81,8 +81,8 @@ class Track:
         dx = self.centroid[0] - self.prev_centroid[0]
         dy = self.centroid[1] - self.prev_centroid[1]
 
-        # Threshold: ignore very small jitter
-        if abs(dx) < 3 and abs(dy) < 3:
+        # Threshold: absorb bounding-box jitter at 1280x720
+        if abs(dx) < 8 and abs(dy) < 8:
             return "stationary"
 
         # Dominant axis determines direction
@@ -216,7 +216,7 @@ class CentroidTracker:
             del self.tracks[tid]
 
     def _get_active_tracks(self) -> list:
-        """Returns tracks that have been seen enough times to be reliable AND are visible in the current frame."""
+        """Returns tracks that are currently visible and confirmed (seen in >= min_hits frames)."""
         return [t for t in self.tracks.values() if t.hits >= self.min_hits and t.lost_frames == 0]
 
     @staticmethod

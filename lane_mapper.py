@@ -54,9 +54,9 @@ if GLOBAL_SHIFT_X != 0 or GLOBAL_SHIFT_Y != 0:
         LANE_CONFIG[lane] = [(x + GLOBAL_SHIFT_X, y + GLOBAL_SHIFT_Y) for (x, y) in LANE_CONFIG[lane]]
 
 EMERGENCY_CLASSES = {"ambulance", "fire truck", "firetruck", "fire_truck"}
-EMERGENCY_BBOX_AREA_THRESHOLD = 18000
-EMERGENCY_SPEED_THRESHOLD = 10
-MIN_LANE_VEHICLE_AREA = 2500
+EMERGENCY_BBOX_AREA_THRESHOLD = 15000
+EMERGENCY_SPEED_THRESHOLD = 15
+MIN_LANE_VEHICLE_AREA = 1000
 
 
 
@@ -67,26 +67,43 @@ class LaneMapper:
     def assign_lane(self, bbox: list):
         """
         Returns the lane name string if the bbox centroid falls inside a
-        defined polygon, or None if it falls outside all polygons.
+        defined polygon. If outside all polygons, falls back to the
+        nearest polygon within a tolerance (vehicles near the stop line
+        at the intersection center).
 
-        FIX (Bug 3): previously fell back to x-position bucketing when no
-        polygon matched, force-assigning every out-of-polygon centroid to
-        some lane. This caused edge-clipped detections and EmergencyLight
-        blobs outside all polygons to pollute lane counts and emergency flags.
-        Now returns None so callers can explicitly ignore unassigned detections.
+        Returns None only if the vehicle is far from all polygons.
         """
         x1, y1, x2, y2 = bbox
         cx = (x1 + x2) // 2
         cy = (y1 + y2) // 2
         point = (cx, cy)
 
+        # First pass: check if centroid is inside any polygon
         for lane_name, polygon in self.lanes.items():
             poly_np = np.array(polygon, dtype=np.int32)
             inside = cv2.pointPolygonTest(poly_np, point, False)
             if inside >= 0:
                 return lane_name
 
-        # Centroid is outside every defined polygon — do not force-assign.
+        # Second pass: find nearest polygon (for vehicles near the stop line)
+        # pointPolygonTest with measureDist=True returns negative distance
+        # for points outside (closer to 0 = closer to the edge)
+        best_lane = None
+        best_dist = float("inf")
+        MAX_FALLBACK_DIST = 150  # pixels — don't assign if too far
+
+        for lane_name, polygon in self.lanes.items():
+            poly_np = np.array(polygon, dtype=np.int32)
+            dist = cv2.pointPolygonTest(poly_np, point, True)
+            # dist is negative for outside points; abs(dist) = distance to edge
+            abs_dist = abs(dist)
+            if abs_dist < best_dist:
+                best_dist = abs_dist
+                best_lane = lane_name
+
+        if best_dist <= MAX_FALLBACK_DIST:
+            return best_lane
+
         return None
 
     def count_vehicles_per_lane(self, vehicle_list: list) -> dict:
@@ -94,7 +111,7 @@ class LaneMapper:
         for vehicle in vehicle_list:
             bbox = vehicle.get("bbox")
             if bbox and self._bbox_area(bbox) < MIN_LANE_VEHICLE_AREA:
-                continue  # Skip distant background vehicles
+                continue
 
             # FIX (Bug 3): no default — None (out-of-polygon) must not
             # accidentally match a real lane name string.

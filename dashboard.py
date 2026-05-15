@@ -314,15 +314,15 @@ def pipeline_thread(source_path: str, config: dict):
 
         detector_cfg = {
             **DETECTOR_CONFIG,
-            "confidence_threshold": config.get("conf_thresh", 0.15),
+            "confidence_threshold": config.get("conf_thresh", 0.20),
             "imgsz": config.get("imgsz", 1280),
         }
 
         tracker_cfg = {
             **TRACKER_CONFIG,
-            "max_distance":    80,
-            "max_lost_frames": 10,
-            "min_hits":        1,
+            "max_distance":    100,
+            "max_lost_frames": 8,
+            "min_hits":        2,
         }
 
         lane_cfg = config.get("lane_config", LANE_CONFIG)
@@ -408,6 +408,11 @@ def pipeline_thread(source_path: str, config: dict):
 
             raw_dets     = detector.detect(frame_rgb, frame_index)
             active_tracks= tracker.update(raw_dets)
+
+            if frame_index % (frame_skip * 5) == 0:
+                lc_debug = frame_out.get("lane_counts", {})
+                lc_str = " | ".join(f"{k}={v}" for k, v in lc_debug.items() if v > 0)
+                print(f"[DEBUG] Frame {frame_index}: YOLO={len(raw_dets)} dets, Tracks={len(active_tracks)}, Lanes: {lc_str}")
 
             frame_out = build_frame_output(
                 frame_index, frame_bgr, frame_rgb,
@@ -541,9 +546,9 @@ with st.sidebar:
     source_path = st.text_input("Frames folder path", value=default_val)
 
     st.markdown("### Detection")
-    conf_thresh = st.slider("Confidence threshold", 0.05, 0.9, 0.15, 0.01)
+    conf_thresh = st.slider("Confidence threshold", 0.05, 0.9, 0.20, 0.01)
     imgsz       = st.select_slider("Inference size", [640, 960, 1280], value=1280)
-    frame_skip  = st.slider("Frame skip", 1, 30, 30)
+    frame_skip  = st.slider("Frame skip", 1, 30, 3)
     use_clahe   = st.checkbox("CLAHE (night/low-light)", value=True)
 
     st.markdown("### AI Mode")
@@ -551,9 +556,9 @@ with st.sidebar:
 
     st.markdown("---")
     col1, col2 = st.columns(2)
-    start_btn = col1.button("▶ Start", use_container_width=True,
+    start_btn = col1.button("▶ Start", width='stretch',
                              disabled=st.session_state.running or not source_path)
-    stop_btn  = col2.button("⏹ Stop",  use_container_width=True,
+    stop_btn  = col2.button("⏹ Stop",  width='stretch',
                              disabled=not st.session_state.running)
 
     if start_btn and source_path:
@@ -652,7 +657,7 @@ def render_dashboard_ui():
         if st.session_state.frame_rgb is not None:
             # Using a slightly custom style to emphasize the "square" feel if possible, 
             # though st.image follows source aspect ratio. 
-            st.image(st.session_state.frame_rgb, use_container_width=True, channels="RGB")
+            st.image(st.session_state.frame_rgb, width='stretch', channels="RGB")
         elif st.session_state.running:
             st.markdown(
                 '<div style="width:100%; aspect-ratio:1/1; max-height:600px; background:#0d1320; border:1px dashed #1e293b; border-radius:12px;'

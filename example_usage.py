@@ -101,10 +101,9 @@ if GLOBAL_SHIFT_X != 0 or GLOBAL_SHIFT_Y != 0:
 # ─ Detector overrides ────────────────────────────────────────────
 CUSTOM_DETECTOR_CONFIG = {
     **DETECTOR_CONFIG,
-    "confidence_threshold": 0.15,        # FIX 1: lowered from 0.25 — night footage
-                                         # drops confidence significantly; 0.15 catches
-                                         # fire trucks, police cars, distant vehicles
-                                         # that were previously filtered out.
+    "confidence_threshold": 0.20,        # Balanced: 0.20 detects distant vehicles
+                                         # while min_hits=2 in tracker filters noise.
+                                         # 0.15 hallucinated, 0.30 missed vehicles.
 
     # FIX 2: increased from 640 to 1280 for overhead/top-down camera.
     # At 640, vehicles in the upper half of the frame are ~20-40px wide
@@ -116,9 +115,9 @@ CUSTOM_DETECTOR_CONFIG = {
 # ─ Tracker overrides ─────────────────────────────────────────────
 CUSTOM_TRACKER_CONFIG = {
     **TRACKER_CONFIG,
-    "max_distance":    80,               # Max pixels to match same vehicle
-    "max_lost_frames": 10,               # Frames before track is dropped
-    "min_hits":        1,                # Min frames to confirm a vehicle
+    "max_distance":    100,              # Max pixels to match same vehicle
+    "max_lost_frames": 8,                # Frames before track is dropped
+    "min_hits":        2,                # Min frames to confirm a vehicle (prevents noise)
 }
 
 # ─ Signal controller overrides (Phase 2) ────────────────────────
