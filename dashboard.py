@@ -310,7 +310,7 @@ def pipeline_thread(source_path: str, config: dict):
 
         signal_cfg = {
             **SIGNAL_CONFIG,
-            "use_dqn":                  config.get("use_dqn", True),
+            "use_dqn":                  config.get("use_dqn", False),
             "enable_adaptive":          True,
             "emergency_preemption":     True,
             "enable_collision_override": True,
@@ -515,7 +515,7 @@ with st.sidebar:
     use_clahe   = st.checkbox("CLAHE (night/low-light)", value=True)
 
     st.markdown("### AI Mode")
-    use_dqn = st.checkbox("Enable DQN signal control", value=True)
+    use_dqn = st.checkbox("Enable DQN signal control", value=False)
 
     st.markdown("---")
     col1, col2 = st.columns(2)

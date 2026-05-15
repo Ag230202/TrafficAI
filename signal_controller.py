@@ -324,7 +324,7 @@ class SignalController:
             target_phase_id = None
         
         # Check if we should transition to next phase
-        transition_threshold = green_duration + self.config.get("yellow_duration", 4)
+        transition_threshold = green_duration
         
         if self.state.elapsed_in_phase >= transition_threshold and not self.state.is_yellow_mode:
             # Enter yellow mode
@@ -539,10 +539,8 @@ class SignalController:
                 collision_red_lanes.add(lane)
         
         # ── Apply collision override: force red on affected lanes ─
-        for lane_name in lane_counts.keys():
-            if lane_name == "unknown":
-                continue
-            
+        all_lanes = ["top_road", "bottom_road", "left_road", "right_road"]
+        for lane_name in all_lanes:
             if lane_name in collision_red_lanes:
                 # Collision → force RED (don't care about phase)
                 red_lanes.append(lane_name)
