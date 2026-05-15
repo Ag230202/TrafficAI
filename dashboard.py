@@ -5,7 +5,7 @@ Streamlit dashboard for the Traffic AI pipeline.
 
 Runs the full pipeline on a video or frames folder and displays:
   • Live annotated video feed
-  • Per-lane vehicle counts (bar chart)
+  • Per-lane vehicle counts
   • Traffic signal state (coloured indicators per lane)
   • Emergency vehicle alerts
   • Crash / collision events
@@ -54,62 +54,60 @@ st.markdown("""
 
   html, body, [class*="css"] {
     font-family: 'Barlow Condensed', sans-serif;
-    background: #0a0d12;
-    color: #e2e8f0;
+    background: #f8fafc;
+    color: #0f172a;
   }
 
   /* Header */
   .dash-header {
-    background: linear-gradient(135deg, #0f1923 0%, #1a2535 60%, #0d1f2d 100%);
-    border-bottom: 2px solid #00ffe0;
+    background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
+    border-bottom: 2px solid #0ea5e9;
     padding: 18px 28px 14px;
     margin-bottom: 20px;
     display: flex;
     align-items: center;
     gap: 16px;
-    box-shadow: 0 4px 32px rgba(0,255,224,0.08);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
   }
   .dash-title {
     font-size: 2.4rem;
     font-weight: 800;
     letter-spacing: 2px;
-    color: #00ffe0;
+    color: #0ea5e9;
     text-transform: uppercase;
     margin: 0;
     line-height: 1;
   }
-  .dash-subtitle {
-    font-size: 0.9rem;
-    color: #64748b;
-    font-weight: 300;
-    letter-spacing: 1px;
-    margin: 0;
-  }
 
   /* Metric cards */
   .metric-card {
-    background: #111827;
-    border: 1px solid #1e293b;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
     border-radius: 10px;
     padding: 16px 20px;
     text-align: center;
     position: relative;
     overflow: hidden;
-    transition: border-color 0.2s;
+    transition: all 0.2s;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.02);
   }
   .metric-card::before {
     content: '';
     position: absolute;
     top: 0; left: 0; right: 0;
     height: 3px;
-    background: var(--accent, #00ffe0);
+    background: var(--accent, #0ea5e9);
   }
-  .metric-card:hover { border-color: #00ffe0; }
+  .metric-card:hover { 
+    border-color: #0ea5e9;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.05);
+  }
   .metric-val {
     font-family: 'JetBrains Mono', monospace;
     font-size: 2.2rem;
     font-weight: 700;
-    color: var(--accent, #00ffe0);
+    color: var(--accent, #0ea5e9);
     line-height: 1;
   }
   .metric-label {
@@ -168,27 +166,27 @@ st.markdown("""
 
   /* Alert banner */
   .alert-banner {
-    background: linear-gradient(90deg, #1a0505, #2a0808);
+    background: #fee2e2;
     border: 1.5px solid #ef4444;
     border-radius: 8px;
     padding: 10px 16px;
     margin: 6px 0;
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.78rem;
-    color: #f87171;
+    color: #b91c1c;
     display: flex;
     align-items: center;
     gap: 8px;
   }
   .emergency-banner {
-    background: linear-gradient(90deg, #1a0d00, #2a1800);
+    background: #ffedd5;
     border: 1.5px solid #f97316;
     border-radius: 8px;
     padding: 10px 16px;
     margin: 6px 0;
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.78rem;
-    color: #fb923c;
+    color: #9a3412;
   }
 
   /* Section headers */
@@ -196,33 +194,47 @@ st.markdown("""
     font-size: 0.65rem;
     letter-spacing: 3px;
     text-transform: uppercase;
-    color: #475569;
+    color: #64748b;
     margin: 16px 0 8px;
     padding-bottom: 4px;
-    border-bottom: 1px solid #1e293b;
+    border-bottom: 1px solid #e2e8f0;
   }
 
   /* Sidebar */
   section[data-testid="stSidebar"] {
-    background: #0d1320;
-    border-right: 1px solid #1e293b;
+    background: #f1f5f9;
+    border-right: 1px solid #e2e8f0;
   }
-  section[data-testid="stSidebar"] * { color: #94a3b8 !important; }
+  section[data-testid="stSidebar"] * { color: #475569 !important; }
   section[data-testid="stSidebar"] h1,
   section[data-testid="stSidebar"] h2,
-  section[data-testid="stSidebar"] h3 { color: #cbd5e1 !important; }
+  section[data-testid="stSidebar"] h3 { color: #1e293b !important; }
 
   /* Log table */
   .log-entry {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.72rem;
     padding: 4px 8px;
-    border-bottom: 1px solid #1e293b;
-    color: #94a3b8;
+    border-bottom: 1px solid #f1f5f9;
+    color: #475569;
   }
-  .log-entry.crash  { color: #f87171; }
-  .log-entry.emerg  { color: #fb923c; }
-  .log-entry.normal { color: #94a3b8; }
+  .log-entry.crash  { color: #dc2626; font-weight: 700; }
+  .log-entry.emerg  { color: #ea580c; font-weight: 700; }
+  .log-entry.normal { color: #475569; }
+
+  /* Lane stats */
+  .lane-stat-card {
+    text-align: center;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 10px 4px;
+    transition: all 0.2s;
+  }
+  .lane-stat-card:hover {
+    border-color: #cbd5e1;
+    background: #f8fafc;
+  }
 
   /* Hide default streamlit chrome except header (needed for sidebar toggle) */
   #MainMenu, footer { visibility: hidden; }
@@ -281,7 +293,7 @@ def pipeline_thread(source_path: str, config: dict):
     Background worker that runs the full Traffic AI pipeline.
     Writes results into st.session_state (thread-safe for simple assignments).
     """
-    print(f"\n[INFO] Starting AI Pipeline Thread...")
+    print(f"\\n[INFO] Starting AI Pipeline Thread...")
     print(f"[INFO] Source: {source_path}")
     try:
         # ── Lazy imports (avoid loading at module level) ────────────────
@@ -460,10 +472,6 @@ def pipeline_thread(source_path: str, config: dict):
                 st.session_state.persisted_emerg = st.session_state.emergency_lanes
             st.session_state.collisions      = frame_out.get("collisions", [])
 
-            # Update lane history for chart
-            for lane, cnt in frame_out["lane_counts"].items():
-                st.session_state.count_history[lane].append(cnt)
-
             # Stats
             s = st.session_state.stats
             s["total_frames"]   += 1
@@ -526,7 +534,7 @@ def pipeline_thread(source_path: str, config: dict):
 #  SIDEBAR — configuration & controls
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 🚦 Traffic AI")
+    # st.markdown("## 🚦 Traffic AI") # Removed as requested
     st.markdown("---")
 
     st.markdown("### Source")
