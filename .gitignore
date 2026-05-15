@@ -21,3 +21,8 @@ test_polygons2.jpg
 traffic_log.csv
 ai_traffic_log.csv
 .env
+
+traffic_env/
+alerts/
+Traffic_Footage_Demo/
+Traffic_Footage_Sanity/
