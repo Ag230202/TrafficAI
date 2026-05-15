@@ -156,13 +156,13 @@ st.markdown("""
     border: 1.5px solid transparent;
     white-space: nowrap;
   }
-  .sig-green  { background: #dcfce7; border-color: #22c55e; color: #166534; }
-  .sig-yellow { background: #fef9c3; border-color: #eab308; color: #854d0e; }
-  .sig-red    { background: #fee2e2; border-color: #ef4444; color: #991b1b; }
+  .sig-green  { background: #052917; border-color: #22c55e; color: #4ade80; }
+  .sig-yellow { background: #1f1a05; border-color: #eab308; color: #fbbf24; }
+  .sig-red    { background: #1f0505; border-color: #ef4444; color: #f87171; }
   .sig-dot { width: 8px; height: 8px; border-radius: 50%; }
-  .sig-green .sig-dot  { background: #22c55e; box-shadow: 0 0 4px #22c55e; }
-  .sig-yellow .sig-dot { background: #eab308; box-shadow: 0 0 4px #eab308; }
-  .sig-red .sig-dot    { background: #ef4444; box-shadow: 0 0 4px #ef4444; }
+  .sig-green .sig-dot  { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+  .sig-yellow .sig-dot { background: #eab308; box-shadow: 0 0 6px #eab308; }
+  .sig-red .sig-dot    { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
 
   /* Alert banner */
   .alert-banner {
@@ -236,8 +236,9 @@ st.markdown("""
     background: #f8fafc;
   }
 
-  /* Hide default streamlit chrome */
-  #MainMenu, footer, header { visibility: hidden; }
+  /* Hide default streamlit chrome except header (needed for sidebar toggle) */
+  #MainMenu, footer { visibility: hidden; }
+  header[data-testid="stHeader"] { background: transparent !important; }
   .block-container { padding-top: 0 !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -426,11 +427,16 @@ def pipeline_thread(source_path: str, config: dict):
                 em_detector, col_detector,
             )
 
+            if frame_index % (frame_skip * 5) == 0:
+                lc_debug = frame_out.get("lane_counts", {})
+                lc_str = " | ".join(f"{k}={v}" for k, v in lc_debug.items() if v > 0)
+                print(f"[DEBUG] Frame {frame_index}: YOLO={len(raw_dets)} dets, Tracks={len(active_tracks)}, Lanes: {lc_str}")
+
             # Crash detection
             crash_report = crash_det.update(frame_out)
             is_new_crash = False
             if crash_report:
-                is_new_crash = alert_disp.dispatch(crash_report, frame_out.get("debug_frame"))
+                is_new_crash = alert_disp.dispatch(crash_report, frame_rgb)
 
             # Signal control
             gated_collisions = [{"lane": crash_report["lane"]}] if crash_report else []
@@ -548,10 +554,9 @@ with st.sidebar:
     source_path = st.text_input("Frames folder path", value=default_val)
 
     st.markdown("### Detection")
-    # Hardcoded detection parameters
-    conf_thresh = 0.20
-    imgsz       = 1280
-    frame_skip  = st.number_input("Frame skip", min_value=1, max_value=30, value=3, step=1)
+    conf_thresh = st.slider("Confidence threshold", 0.05, 0.9, 0.20, 0.01)
+    imgsz       = st.select_slider("Inference size", [640, 960, 1280], value=1280)
+    frame_skip  = st.slider("Frame skip", 1, 30, 3)
     use_clahe   = st.checkbox("CLAHE (night/low-light)", value=True)
 
     st.markdown("### AI Mode")
@@ -601,19 +606,20 @@ def render_dashboard_ui():
     <div class="dash-header">
       <div>
         <p class="dash-title">🚦 Traffic Command Center</p>
+        <p class="dash-subtitle">AI-POWERED INTERSECTION ANALYSIS · PHASE 2 ACTIVE</p>
       </div>
-      <div style="margin-left:auto; text-align:right; font-family:'JetBrains Mono',monospace; font-size:0.85rem; color:#64748b;">
+      <div style="margin-left:auto; text-align:right; font-family:'JetBrains Mono',monospace; font-size:0.85rem; color:#475569;">
         {status_dot} {status_label} &nbsp;|&nbsp; FPS: {st.session_state.current_fps:.1f} &nbsp;|&nbsp;
         Frames: {st.session_state.frames_processed}
       </div>
     </div>
     """, unsafe_allow_html=True)
 
+
     # ─── TOP TOOLBAR: Signal + Metrics (50/50) ───────────────────────────────
     t_col1, t_col2 = st.columns([1, 1])
 
     with t_col1:
-        st.markdown('<p class="section-head" style="margin-top:0;">Signal State</p>', unsafe_allow_html=True)
         sig = st.session_state.signal_output
         if sig:
             pills = ""
@@ -628,131 +634,160 @@ def render_dashboard_ui():
             
             override = sig.get("override_reason", "")
             if override and "standard" not in override:
-                pills += f'<span style="font-family:JetBrains Mono;font-size:0.6rem;color:#ea580c;margin-left:8px;vertical-align:middle;">⚠ {override.upper()}</span>'
+                pills += f'<span style="font-family:JetBrains Mono;font-size:0.6rem;color:#f97316;margin-left:8px;vertical-align:middle;">⚠ {override.upper()}</span>'
             
-            st.markdown(f'<div class="signal-row" style="justify-content:flex-start;">{pills}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="signal-row" style="justify-content:flex-start; margin-top:8px;">{pills}</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div style="color:#94a3b8;font-size:0.75rem;margin-top:8px;">SIGNAL OFFLINE</div>', unsafe_allow_html=True)
+            st.markdown('<div style="color:#334155;font-size:0.75rem;margin-top:12px;">SIGNAL OFFLINE</div>', unsafe_allow_html=True)
 
     with t_col2:
-        st.markdown('<p class="section-head" style="margin-top:0;">System Stats</p>', unsafe_allow_html=True)
         s = st.session_state.stats
+        m1, m2, m3, m4 = st.columns(4)
         
-        def mini_metric_card(val, label, accent="#0ea5e9"):
+        def mini_metric_card(val, label, accent="#00ffe0"):
             return f"""<div class="metric-card compact" style="--accent:{accent}">
               <div class="metric-val">{val}</div>
               <div class="metric-label">{label}</div>
             </div>"""
 
-        m_cols = st.columns(4)
-        m_cols[0].markdown(mini_metric_card(s["total_frames"], "FRAMES"), unsafe_allow_html=True)
-        m_cols[1].markdown(mini_metric_card(s["total_vehicles"], "VEHICLES", "#6366f1"), unsafe_allow_html=True)
-        m_cols[2].markdown(mini_metric_card(s["total_collisions"], "CRASHES", "#ef4444"), unsafe_allow_html=True)
-        m_cols[3].markdown(mini_metric_card(s["total_emergency"], "EMERGENCY", "#f97316"), unsafe_allow_html=True)
-
-    st.markdown('<hr style="margin: 15px 0; border: 0; border-top: 1px solid #e2e8f0;">', unsafe_allow_html=True)
-
-    # ─── MAIN CONTENT LAYOUT ────────────────────────────────────────────────
-    main_col, side_col = st.columns([2.2, 1])
-
-    # ─── LEFT: LIVE FEED & LOGS ──
-    with main_col:
-        st.markdown('<p class="section-head" style="margin-top:0;">Live Intelligence Feed</p>', unsafe_allow_html=True)
+        m1.markdown(mini_metric_card(s["total_frames"], "FRAMES"), unsafe_allow_html=True)
+        m2.markdown(mini_metric_card(s["total_vehicles"], "VEHICLES", "#818cf8"), unsafe_allow_html=True)
+        m3.markdown(mini_metric_card(s["total_collisions"], "CRASHES", "#ef4444"), unsafe_allow_html=True)
+        m4.markdown(mini_metric_card(s["total_emergency"], "EMERGENCY", "#f97316"), unsafe_allow_html=True)
         
-        feed_container = st.container()
-        with feed_container:
-            if st.session_state.frame_rgb is not None:
-                st.image(st.session_state.frame_rgb, width='stretch', channels="RGB")
-            elif st.session_state.running:
-                st.markdown(
-                    '<div style="width:100%; aspect-ratio:16/9; background:#f1f5f9; border:1px dashed #cbd5e1; border-radius:12px;'
-                    'display:flex; align-items:center; justify-content:center;'
-                    'color:#0ea5e9; font-size:1rem; letter-spacing:4px; font-family:\'JetBrains Mono\',monospace;">'
-                    'INITIALIZING SENSORS...</div>',
-                    unsafe_allow_html=True
-                )
-            else:
-                st.markdown(
-                    '<div style="width:100%; aspect-ratio:16/9; background:#f1f5f9; border:1px dashed #cbd5e1; border-radius:12px;'
-                    'display:flex; align-items:center; justify-content:center;'
-                    'color:#94a3b8; font-size:1rem; letter-spacing:4px;">SYSTEM OFFLINE</div>',
-                    unsafe_allow_html=True
-                )
+    st.markdown('<hr style="margin: 10px 0; border: 0; border-top: 1px solid #1e293b;">', unsafe_allow_html=True)
 
-        # Event log at the bottom of main feed
-        st.markdown('<p class="section-head">Real-time Event Log</p>', unsafe_allow_html=True)
-        log_html = '<div style="max-height:350px;overflow-y:auto; background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:4px;">'
-        if not st.session_state.event_log:
-            log_html += '<div style="color:#94a3b8;font-size:0.72rem;text-align:center;padding:20px;">No events recorded yet.</div>'
+    # ─── LIVE FEED (Primary Intelligence) ────────────────────────────────────
+    st.markdown('<p class="section-head">Live Intelligence Feed</p>', unsafe_allow_html=True)
+    
+    feed_container = st.container()
+    with feed_container:
+        if st.session_state.frame_rgb is not None:
+            # Using a slightly custom style to emphasize the "square" feel if possible, 
+            # though st.image follows source aspect ratio. 
+            st.image(st.session_state.frame_rgb, width='stretch', channels="RGB")
+        elif st.session_state.running:
+            st.markdown(
+                '<div style="width:100%; aspect-ratio:1/1; max-height:600px; background:#0d1320; border:1px dashed #1e293b; border-radius:12px;'
+                'display:flex; align-items:center; justify-content:center;'
+                'color:#00ffe0; font-size:1rem; letter-spacing:4px; font-family:\'JetBrains Mono\',monospace;">'
+                'INITIALIZING SENSORS...</div>',
+                unsafe_allow_html=True
+            )
         else:
-            for ev in list(st.session_state.event_log)[:25]:
-                css_cls = ev["type"]
-                icon    = "💥" if ev["type"] == "crash" else ("🚨" if ev["type"] == "emerg" else "·")
-                log_html += f'<div class="log-entry {css_cls}">[{ev["ts"]}] {icon} {ev["msg"]}</div>'
-        log_html += '</div>'
-        st.markdown(log_html, unsafe_allow_html=True)
+            st.markdown(
+                '<div style="width:100%; aspect-ratio:1/1; max-height:600px; background:#0d1320; border:1px dashed #1e293b; border-radius:12px;'
+                'display:flex; align-items:center; justify-content:center;'
+                'color:#334155; font-size:1rem; letter-spacing:4px;">SYSTEM OFFLINE</div>',
+                unsafe_allow_html=True
+            )
 
-    # ─── RIGHT: ANALYTICS & ALERTS ──
-    with side_col:
-        # Lane Density
-        st.markdown('<p class="section-head" style="margin-top:0;">Live Lane Density</p>', unsafe_allow_html=True)
+    st.markdown('<div style="margin-top:25px;"></div>', unsafe_allow_html=True)
+
+    # ─── ANALYTICS & DISPATCH (50/50 Ratio) ──────────────────────────────────
+    col_left, col_right = st.columns([1, 1])
+
+    # ── LEFT: Charts & Analytics ──
+    with col_left:
+        # Lane counts bar -> NUMBERS
+        st.markdown('<p class="section-head">Live Lane Density</p>', unsafe_allow_html=True)
         lc = st.session_state.lane_counts
         lanes_display = ["top_road", "bottom_road", "left_road", "right_road"]
-        bar_colors    = ["#eab308", "#22c55e", "#2563eb", "#ef4444"]
+        bar_colors    = ["#00ffe0", "#818cf8", "#f97316", "#f43f5e"]
         
-        n_cols = st.columns(2)
+        n_cols = st.columns(4)
         for i, lane in enumerate(lanes_display):
             val = lc.get(lane, 0)
-            n_cols[i % 2].markdown(f"""
-                <div class="lane-stat-card" style="margin-bottom:8px;">
+            n_cols[i].markdown(f"""
+                <div style="text-align:center; background:#0d131a; border:1px solid #1e293b; border-radius:6px; padding:10px 4px;">
                     <div style="color:{bar_colors[i]}; font-size:1.6rem; font-family:'JetBrains Mono'; font-weight:700; line-height:1;">{val}</div>
-                    <div style="color:#64748b; font-size:0.6rem; letter-spacing:1px; margin-top:4px;">{lane.replace('_road','').upper()}</div>
+                    <div style="color:#475569; font-size:0.6rem; letter-spacing:1px; margin-top:4px;">{lane.replace('_road','').upper()}</div>
                 </div>
             """, unsafe_allow_html=True)
 
-        # Historical Totals
+        # Rolling count history -> NUMBERS (LANE TOTALS)
         st.markdown('<p class="section-head">Historical Lane Totals</p>', unsafe_allow_html=True)
         lt = st.session_state.stats.get("lane_totals", {})
-        h_cols = st.columns(2)
+        h_cols = st.columns(4)
         for i, lane in enumerate(lanes_display):
             val = lt.get(lane, 0)
-            h_cols[i % 2].markdown(f"""
-                <div class="lane-stat-card" style="margin-bottom:8px;">
-                    <div style="color:{bar_colors[i]}; font-size:1.4rem; font-family:'JetBrains Mono'; font-weight:700; line-height:1;">{val}</div>
-                    <div style="color:#64748b; font-size:0.55rem; letter-spacing:1px; margin-top:4px;">{lane.replace('_road','').upper()} TOTAL</div>
+            h_cols[i].markdown(f"""
+                <div style="text-align:center; background:#0d131a; border:1px solid #1e293b; border-radius:6px; padding:10px 4px;">
+                    <div style="color:{bar_colors[i]}; font-size:1.6rem; font-family:'JetBrains Mono'; font-weight:700; line-height:1;">{val}</div>
+                    <div style="color:#475569; font-size:0.6rem; letter-spacing:1px; margin-top:4px;">{lane.replace('_road','').upper()} TOTAL</div>
                 </div>
             """, unsafe_allow_html=True)
 
-        # Direction Distribution
+        # Direction distribution -> NUMBERS
         st.markdown('<p class="section-head">Direction Distribution</p>', unsafe_allow_html=True)
         dirs = st.session_state.stats["direction_counts"]
         if dirs:
-            for d_label, d_val in list(dirs.items())[:6]:
-                st.markdown(f"""
-                    <div style="margin-bottom:6px; padding:4px 10px; background:#ffffff; border:1px solid #e2e8f0; border-left:3px solid #6366f1; border-radius:4px;">
-                        <span style="color:#64748b; font-size:0.7rem; text-transform:uppercase;">{d_label}:</span>
-                        <span style="color:#0f172a; font-family:'JetBrains Mono'; font-weight:700; float:right;">{d_val}</span>
+            d_cols = st.columns(min(len(dirs), 3))
+            for i, (d_label, d_val) in enumerate(list(dirs.items())[:6]):
+                col_idx = i % 3
+                d_cols[col_idx].markdown(f"""
+                    <div style="margin-bottom:8px; padding:6px 10px; background:#0d131a; border-left:3px solid #60a5fa; border-radius:0 4px 4px 0;">
+                        <span style="color:#94a3b8; font-size:0.7rem; text-transform:uppercase;">{d_label}:</span>
+                        <span style="color:#fff; font-family:'JetBrains Mono'; font-weight:700; float:right;">{d_val}</span>
                     </div>
                 """, unsafe_allow_html=True)
         else:
-            st.markdown('<div style="color:#94a3b8;font-size:0.7rem;text-align:center;padding:10px;">Waiting for data…</div>', unsafe_allow_html=True)
+            st.markdown('<div style="color:#334155;font-size:0.75rem;text-align:center;padding:12px;">Waiting for analytical data…</div>', unsafe_allow_html=True)
 
-        # Alerts section
-        st.markdown('<p class="section-head">Dispatch Alerts</p>', unsafe_allow_html=True)
-        # Emergency
-        show_emerg = st.session_state.persisted_emerg and (time.time() - st.session_state.last_emerg_time < 10)
+
+    # ── RIGHT: Alerts & Logs ──
+    with col_right:
+        # ── Emergency section ──
+        st.markdown('<p class="section-head">Emergency Dispatch</p>', unsafe_allow_html=True)
+        show_emerg = False
+        if st.session_state.persisted_emerg and (time.time() - st.session_state.last_emerg_time < 10):
+            show_emerg = True
+
         if show_emerg:
             for lane in st.session_state.persisted_emerg:
-                st.markdown(f'<div class="emergency-banner">🚨 EMERGENCY VEHICLE → <b>{lane.replace("_"," ").upper()}</b></div>', unsafe_allow_html=True)
-        
-        # Crash
+                st.markdown(
+                    f'<div class="emergency-banner">🚨 EMERGENCY VEHICLE<br><b>{lane.replace("_"," ").upper()}</b></div>',
+                    unsafe_allow_html=True
+                )
+        else:
+            st.markdown(
+                '<div style="color:#2a3a4a;background:#0d131a;border:1px solid #1e293b;'
+                'border-radius:8px;padding:10px 14px;font-size:0.75rem;letter-spacing:1px;">NO ACTIVE EMERGENCY</div>',
+                unsafe_allow_html=True
+            )
+
+        # ── Crash section ──
+        st.markdown('<p class="section-head">Crash Alerts</p>', unsafe_allow_html=True)
+        show_crash = False
         cr = st.session_state.persisted_crash
-        show_crash = cr and (time.time() - st.session_state.last_crash_time < 10)
+        if cr and (time.time() - st.session_state.last_crash_time < 10):
+            show_crash = True
+
         if show_crash:
-            st.markdown(f'<div class="alert-banner">💥 CRASH: <b>{cr["lane"].upper()}</b> | SEV: <b>{cr["severity"].upper()}</b></div>', unsafe_allow_html=True)
-        
-        if not show_emerg and not show_crash:
-            st.markdown('<div style="color:#166534;background:#dcfce7;border:1px solid #b91c1c00;border-radius:8px;padding:10px;font-size:0.7rem;text-align:center;">✓ SYSTEM CLEAR</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="alert-banner">💥 CRASH DETECTED<br>'
+                f'Lane: <b>{cr["lane"]}</b><br>'
+                f'Severity: <b>{cr["severity"].upper()}</b> | Score: <b>{cr["score"]}</b></div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div style="color:#1e3a2a;background:#0a1f15;border:1px solid #134924;'
+                'border-radius:8px;padding:10px 14px;font-size:0.75rem;letter-spacing:1px;">✓ SYSTEM CLEAR</div>',
+                unsafe_allow_html=True
+            )
+
+        # Event log
+        st.markdown('<p class="section-head">Event Log</p>', unsafe_allow_html=True)
+        log_html = '<div style="max-height:480px;overflow-y:auto;">'
+        for ev in list(st.session_state.event_log)[:25]:
+            css_cls = ev["type"]
+            icon    = "💥" if ev["type"] == "crash" else ("🚨" if ev["type"] == "emerg" else "·")
+            log_html += f'<div class="log-entry {css_cls}">[{ev["ts"]}] {icon} {ev["msg"]}</div>'
+        log_html += '</div>'
+        if not st.session_state.event_log:
+            log_html = '<div style="color:#1e293b;font-size:0.72rem;text-align:center;padding:8px;">No events yet</div>'
+        st.markdown(log_html, unsafe_allow_html=True)
 
 
 # ─── EXECUTE DASHBOARD ──────────────────────────────────────────────────────

@@ -119,7 +119,7 @@ class SignalControllerState:
     target_phase_id: Optional[int] = None
     current_override: Optional[str] = None
     
-    def reset_phase(self, phase_id: int, frame_id: int):
+    def reset_phase(self, phase_id: int, frame_id: int, all_phases: dict):
         """Reset counters when transitioning to a new phase."""
         self.current_phase_id = phase_id
         self.elapsed_in_phase = 0.0
@@ -127,6 +127,15 @@ class SignalControllerState:
         self.is_yellow_mode = False
         self.yellow_elapsed = 0.0
         self.all_red_elapsed = 0.0
+        
+        # Update wait counters: increment for skipped, reset for current
+        for p_id, phase_def in all_phases.items():
+            for lane in phase_def.get("lanes", []):
+                if p_id == phase_id:
+                    self.wait_cycle_count[lane] = 0
+                else:
+                    self.wait_cycle_count[lane] = self.wait_cycle_count.get(lane, 0) + 1
+
 
 
 @dataclass
@@ -291,11 +300,18 @@ class SignalController:
                 target_phase_id = dqn_action
                 self.state.current_override = "dqn_agent"
                 
-            # Compute a dummy green duration for UI (force switch if needed)
-            if target_phase_id != self.state.current_phase_id:
-                green_duration = max(min_green, self.state.elapsed_in_phase)
+            # ALLOCATE TIMING: 
+            # If the AI wants to keep the current phase, we use adaptive density 
+            # to calculate the exact timing needed for the current load.
+            if target_phase_id == self.state.current_phase_id:
+                phase_def = self.phases[self.state.current_phase_id]
+                green_duration = self._compute_adaptive_green_time(
+                    phase_def, lane_counts
+                )
             else:
-                green_duration = self.config.get("max_green_duration", 50)
+                # AI wants to switch — allow switch if min_green is met
+                green_duration = max(min_green, self.state.elapsed_in_phase)
+                
             self.state.phase_green_duration = green_duration
             
         else:
@@ -308,7 +324,7 @@ class SignalController:
             target_phase_id = None
         
         # Check if we should transition to next phase
-        transition_threshold = green_duration + self.config.get("yellow_duration", 4)
+        transition_threshold = green_duration
         
         if self.state.elapsed_in_phase >= transition_threshold and not self.state.is_yellow_mode:
             # Enter yellow mode
@@ -331,7 +347,7 @@ class SignalController:
                 next_phase_id = getattr(self.state, "target_phase_id", None)
                 if next_phase_id is None:
                     next_phase_id = self._get_next_phase_id(self.state.current_phase_id)
-                self.state.reset_phase(next_phase_id, frame_id)
+                self.state.reset_phase(next_phase_id, frame_id, self.phases)
                 phase_def = self.phases[self.state.current_phase_id]
                 self.state.phase_green_duration = self._compute_adaptive_green_time(phase_def, lane_counts)
         
@@ -371,7 +387,7 @@ class SignalController:
             target_phase_id = self.state.current_phase_id
         
         # Force switch to emergency phase
-        self.state.reset_phase(target_phase_id, frame_id)
+        self.state.reset_phase(target_phase_id, frame_id, self.phases)
         emergency_duration = self.config.get("emergency_duration", 25)
         self.state.phase_green_duration = emergency_duration
         
@@ -484,15 +500,7 @@ class SignalController:
                     best_wait          = wait
                     best_starved_phase = phase_id
 
-        # Update wait counters: increment for every skipped phase's lanes,
-        # reset for the lanes that just got green (current phase)
-        for phase_id, phase_def in self.phases.items():
-            for lane in phase_def.get("lanes", []):
-                if phase_id == current_phase_id:
-                    self.state.wait_cycle_count[lane] = 0   # just served
-                else:
-                    self.state.wait_cycle_count[lane] = \
-                        self.state.wait_cycle_count.get(lane, 0) + 1
+        # Wait counters are now updated in reset_phase() when an actual transition occurs
 
         if best_starved_phase is not None:
             return best_starved_phase  # Anti-starvation promotion
@@ -531,10 +539,8 @@ class SignalController:
                 collision_red_lanes.add(lane)
         
         # ── Apply collision override: force red on affected lanes ─
-        for lane_name in lane_counts.keys():
-            if lane_name == "unknown":
-                continue
-            
+        all_lanes = ["top_road", "bottom_road", "left_road", "right_road"]
+        for lane_name in all_lanes:
             if lane_name in collision_red_lanes:
                 # Collision → force RED (don't care about phase)
                 red_lanes.append(lane_name)

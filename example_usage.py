@@ -51,7 +51,8 @@ from data_logger import DataLogger
 
 # Path to your folder of extracted video frames (JPG/PNG files)
 # Now loaded from .env for security and portability
-FRAMES_FOLDER = os.getenv("FRAMES_FOLDER_PATH", "")
+# You can also set this directly if you prefer: FRAMES_FOLDER = r"E:\photos"
+FRAMES_FOLDER = os.getenv("FRAMES_FOLDER_PATH", r"E:\photos")
 # ── Preprocessing overrides ─────────────────
 PREPROCESS_CONFIG = {
     **DEFAULT_PREPROCESS_CONFIG,         # Start from defaults
@@ -81,9 +82,9 @@ PREPROCESS_CONFIG = {
 
 # ─ Lane boundaries ───────────────────────────────────────────────
 CUSTOM_LANE_CONFIG = {
-    "left_road": [(8,399),(397,256),(492,677),(7,692)],
+    "left_road": [(8,399),(397,256),(492,720),(0,720)],
     "bottom_road": [(1083,411),(1269,635),(1277,714),(801,717)],
-    "right_road": [(1005,81),(1069,134),(1028,304),(784,164)],
+    "right_road": [(1005,81),(1100,134),(1100,400),(1028,304),(784,164)],
     "top_road": [(405,51),(466,40),(723,159),(455,209)]
 }
 
@@ -100,10 +101,9 @@ if GLOBAL_SHIFT_X != 0 or GLOBAL_SHIFT_Y != 0:
 # ─ Detector overrides ────────────────────────────────────────────
 CUSTOM_DETECTOR_CONFIG = {
     **DETECTOR_CONFIG,
-    "confidence_threshold": 0.15,        # FIX 1: lowered from 0.25 — night footage
-                                         # drops confidence significantly; 0.15 catches
-                                         # fire trucks, police cars, distant vehicles
-                                         # that were previously filtered out.
+    "confidence_threshold": 0.20,        # Balanced: 0.20 detects distant vehicles
+                                         # while min_hits=2 in tracker filters noise.
+                                         # 0.15 hallucinated, 0.30 missed vehicles.
 
     # FIX 2: increased from 640 to 1280 for overhead/top-down camera.
     # At 640, vehicles in the upper half of the frame are ~20-40px wide
@@ -115,9 +115,9 @@ CUSTOM_DETECTOR_CONFIG = {
 # ─ Tracker overrides ─────────────────────────────────────────────
 CUSTOM_TRACKER_CONFIG = {
     **TRACKER_CONFIG,
-    "max_distance":    80,               # Max pixels to match same vehicle
-    "max_lost_frames": 10,               # Frames before track is dropped
-    "min_hits":        1,                # Min frames to confirm a vehicle
+    "max_distance":    100,              # Max pixels to match same vehicle
+    "max_lost_frames": 8,                # Frames before track is dropped
+    "min_hits":        2,                # Min frames to confirm a vehicle (prevents noise)
 }
 
 # ─ Signal controller overrides (Phase 2) ────────────────────────
@@ -170,6 +170,11 @@ class PipelineSummary:
         self.lane_totals           = {}   # cumulative vehicle counts per lane
         self.direction_counts      = {}   # direction → count
 
+        # Unique vehicle tracking
+        self.seen_vehicle_ids      = set()
+        self.seen_in_lane          = {}
+        self.seen_in_direction     = {}
+
         # Emergency vehicle tracking
         self.total_emergency_detections = 0          # total emergency flags across all frames
         self.emergency_lane_counts      = {}         # lane → how many frames had emergency there
@@ -178,16 +183,32 @@ class PipelineSummary:
 
     def update(self, frame_output: dict):
         self.total_frames   += 1
-        self.total_vehicles += len(frame_output["vehicles"])
 
-        # Accumulate lane counts
-        for lane, count in frame_output["lane_counts"].items():
-            self.lane_totals[lane] = self.lane_totals.get(lane, 0) + count
-
-        # Accumulate direction counts
         for v in frame_output["vehicles"]:
+            vid = v.get("id")
+            if vid is None:
+                continue
+
+            # Unique global count
+            if vid not in self.seen_vehicle_ids:
+                self.seen_vehicle_ids.add(vid)
+                self.total_vehicles += 1
+
+            # Unique direction count
             d = v.get("direction", "unknown")
-            self.direction_counts[d] = self.direction_counts.get(d, 0) + 1
+            if d not in self.seen_in_direction:
+                self.seen_in_direction[d] = set()
+            if vid not in self.seen_in_direction[d]:
+                self.seen_in_direction[d].add(vid)
+                self.direction_counts[d] = self.direction_counts.get(d, 0) + 1
+
+            # Unique lane count
+            lane = v.get("lane", "unknown")
+            if lane not in self.seen_in_lane:
+                self.seen_in_lane[lane] = set()
+            if vid not in self.seen_in_lane[lane]:
+                self.seen_in_lane[lane].add(vid)
+                self.lane_totals[lane] = self.lane_totals.get(lane, 0) + 1
 
         # ── Emergency vehicle tracking ───────────────────────────────
         emerg_lanes = frame_output.get("emergency_lane", [])
@@ -328,9 +349,10 @@ def draw_signal_state(debug_frame, signal_output, lane_mapper):
         )
     
     # Draw overall phase info at top
+    alloc_prefix = "AI ALLOCATED" if signal_output.override_reason == "dqn_agent" else "Adaptive"
     phase_info = (
         f"Phase {signal_output.phase_id}: {signal_output.phase_name} | "
-        f"Green: {signal_output.green_duration}s | "
+        f"{alloc_prefix} Green: {signal_output.green_duration}s | "
         f"Elapsed: {signal_output.elapsed_in_phase:.1f}s"
     )
     
