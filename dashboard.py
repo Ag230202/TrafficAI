@@ -120,30 +120,48 @@ st.markdown("""
     margin-top: 4px;
   }
 
+  /* Compact variant */
+  .metric-card.compact {
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    height: 60px;
+  }
+  .metric-card.compact .metric-val {
+    font-size: 1.4rem;
+  }
+  .metric-card.compact .metric-label {
+    font-size: 0.6rem;
+    letter-spacing: 1px;
+    margin-top: 2px;
+  }
+
   /* Signal lights */
   .signal-row {
     display: flex;
-    gap: 12px;
+    gap: 8px;
     justify-content: center;
-    flex-wrap: wrap;
-    padding: 8px 0;
+    flex-wrap: nowrap;
+    padding: 4px 0;
   }
   .signal-pill {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 14px;
+    gap: 6px;
+    padding: 4px 12px;
     border-radius: 100px;
-    font-size: 0.78rem;
+    font-size: 0.7rem;
     font-weight: 700;
-    letter-spacing: 1.5px;
+    letter-spacing: 1px;
     text-transform: uppercase;
     border: 1.5px solid transparent;
+    white-space: nowrap;
   }
   .sig-green  { background: #052917; border-color: #22c55e; color: #4ade80; }
   .sig-yellow { background: #1f1a05; border-color: #eab308; color: #fbbf24; }
   .sig-red    { background: #1f0505; border-color: #ef4444; color: #f87171; }
-  .sig-dot { width: 9px; height: 9px; border-radius: 50%; }
+  .sig-dot { width: 8px; height: 8px; border-radius: 50%; }
   .sig-green .sig-dot  { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
   .sig-yellow .sig-dot { background: #eab308; box-shadow: 0 0 6px #eab308; }
   .sig-red .sig-dot    { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
@@ -206,8 +224,9 @@ st.markdown("""
   .log-entry.emerg  { color: #fb923c; }
   .log-entry.normal { color: #94a3b8; }
 
-  /* Hide default streamlit chrome */
-  #MainMenu, footer, header { visibility: hidden; }
+  /* Hide default streamlit chrome except header (needed for sidebar toggle) */
+  #MainMenu, footer { visibility: hidden; }
+  header[data-testid="stHeader"] { background: transparent !important; }
   .block-container { padding-top: 0 !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -506,7 +525,20 @@ with st.sidebar:
     st.markdown("---")
 
     st.markdown("### Source")
-    source_path = st.text_input("Frames folder path", value=os.getenv("FRAMES_FOLDER_PATH",""))
+    
+    # Initialize path history
+    if "path_history" not in st.session_state:
+        st.session_state.path_history = []
+        env_path = os.getenv("FRAMES_FOLDER_PATH", "")
+        if env_path: st.session_state.path_history.append(env_path)
+
+    # Dropdown for history
+    hist_options = ["None"] + st.session_state.path_history
+    quick_select = st.selectbox("Quick Select", options=hist_options, index=0)
+    
+    # Default value for text input
+    default_val = quick_select if quick_select != "None" else (st.session_state.path_history[0] if st.session_state.path_history else "")
+    source_path = st.text_input("Frames folder path", value=default_val)
 
     st.markdown("### Detection")
     conf_thresh = st.slider("Confidence threshold", 0.05, 0.9, 0.15, 0.01)
@@ -519,12 +551,18 @@ with st.sidebar:
 
     st.markdown("---")
     col1, col2 = st.columns(2)
-    start_btn = col1.button("▶ Start", width="stretch",
+    start_btn = col1.button("▶ Start", use_container_width=True,
                              disabled=st.session_state.running or not source_path)
-    stop_btn  = col2.button("⏹ Stop",  width="stretch",
+    stop_btn  = col2.button("⏹ Stop",  use_container_width=True,
                              disabled=not st.session_state.running)
 
     if start_btn and source_path:
+        # Update path history
+        if source_path in st.session_state.path_history:
+            st.session_state.path_history.remove(source_path)
+        st.session_state.path_history.insert(0, source_path)
+        st.session_state.path_history = st.session_state.path_history[:3] # Max 3
+
         _init_state()
         st.session_state.running   = True
         st.session_state.stop_flag = False
@@ -565,18 +603,12 @@ def render_dashboard_ui():
     """, unsafe_allow_html=True)
 
 
-    # ─── MAIN LAYOUT: video + metrics | charts | events ───────────────────────
-    col_left, col_mid, col_right = st.columns([2.2, 1.6, 1.2])
+    # ─── TOP TOOLBAR: Signal + Metrics (50/50) ───────────────────────────────
+    t_col1, t_col2 = st.columns([1, 1])
 
-    # ── LEFT: Video feed ─────────────────────────────────────────────────────────
-    with col_left:
-        # ── Signal state above video ─────────────────────────────────────────
-        st.markdown('<p class="section-head">Signal State</p>', unsafe_allow_html=True)
+    with t_col1:
         sig = st.session_state.signal_output
         if sig:
-            phase_info = f"Phase {sig['phase_id']} — {sig['phase_name']} | {sig['green_duration']}s green | elapsed {sig['elapsed_in_phase']:.1f}s"
-            st.markdown(f'<div style="font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#475569;margin-bottom:8px;">{phase_info}</div>', unsafe_allow_html=True)
-
             pills = ""
             for lane in ["top_road", "bottom_road", "left_road", "right_road"]:
                 short = lane.replace("_road", "").upper()
@@ -586,129 +618,114 @@ def render_dashboard_ui():
                     pills += f'<span class="signal-pill sig-yellow"><span class="sig-dot"></span>{short}</span>'
                 else:
                     pills += f'<span class="signal-pill sig-red"><span class="sig-dot"></span>{short}</span>'
-
+            
             override = sig.get("override_reason", "")
             if override and "standard" not in override:
-                pills += f'<span style="font-family:JetBrains Mono;font-size:0.65rem;color:#f97316;margin-left:10px;">⚠ {override.upper()}</span>'
-
-            st.markdown(f'<div class="signal-row">{pills}</div>', unsafe_allow_html=True)
+                pills += f'<span style="font-family:JetBrains Mono;font-size:0.6rem;color:#f97316;margin-left:8px;vertical-align:middle;">⚠ {override.upper()}</span>'
+            
+            st.markdown(f'<div class="signal-row" style="justify-content:flex-start; margin-top:8px;">{pills}</div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div style="color:#334155;font-size:0.8rem;text-align:center;padding:12px;">Signal controller offline</div>', unsafe_allow_html=True)
+            st.markdown('<div style="color:#334155;font-size:0.75rem;margin-top:12px;">SIGNAL OFFLINE</div>', unsafe_allow_html=True)
 
-        st.markdown('<div style="margin-top:20px;"></div>', unsafe_allow_html=True) # spacer
-
-        st.markdown('<p class="section-head">Live Feed</p>', unsafe_allow_html=True)
-        if st.session_state.frame_rgb is not None:
-            st.image(st.session_state.frame_rgb, width="stretch", channels="RGB")
-        elif st.session_state.running:
-            st.markdown(
-                '<div style="width:100%; aspect-ratio:16/9; background:#0d1320;border:1px dashed #1e293b;border-radius:8px;'
-                'display:flex;align-items:center;justify-content:center;'
-                'color:#00ffe0;font-size:0.85rem;letter-spacing:2px;font-family:\'JetBrains Mono\',monospace;">'
-                'LOADING LIVE FEED...</div>',
-                unsafe_allow_html=True
-            )
-        else:
-            st.markdown(
-                '<div style="width:100%; aspect-ratio:16/9; background:#0d1320;border:1px dashed #1e293b;border-radius:8px;'
-                'display:flex;align-items:center;justify-content:center;'
-                'color:#334155;font-size:0.85rem;letter-spacing:2px;">NO SIGNAL</div>',
-                unsafe_allow_html=True
-            )
-
-
-    # ── MIDDLE: Stats + charts ────────────────────────────────────────────────────
-    with col_mid:
-        # Metric cards
+    with t_col2:
         s = st.session_state.stats
-        m1, m2 = st.columns(2)
-        m3, m4 = st.columns(2)
-
-        def metric_card(val, label, accent="#00ffe0"):
-            return f"""<div class="metric-card" style="--accent:{accent}">
+        m1, m2, m3, m4 = st.columns(4)
+        
+        def mini_metric_card(val, label, accent="#00ffe0"):
+            return f"""<div class="metric-card compact" style="--accent:{accent}">
               <div class="metric-val">{val}</div>
               <div class="metric-label">{label}</div>
             </div>"""
 
-        m1.markdown(metric_card(s["total_frames"], "FRAMES"), unsafe_allow_html=True)
-        m2.markdown(metric_card(s["total_vehicles"], "VEHICLES", "#818cf8"), unsafe_allow_html=True)
-        m3.markdown(metric_card(s["total_collisions"], "CRASHES", "#ef4444"), unsafe_allow_html=True)
-        m4.markdown(metric_card(s["total_emergency"], "EMERGENCY", "#f97316"), unsafe_allow_html=True)
+        m1.markdown(mini_metric_card(s["total_frames"], "FRAMES"), unsafe_allow_html=True)
+        m2.markdown(mini_metric_card(s["total_vehicles"], "VEHICLES", "#818cf8"), unsafe_allow_html=True)
+        m3.markdown(mini_metric_card(s["total_collisions"], "CRASHES", "#ef4444"), unsafe_allow_html=True)
+        m4.markdown(mini_metric_card(s["total_emergency"], "EMERGENCY", "#f97316"), unsafe_allow_html=True)
+        
+    st.markdown('<hr style="margin: 10px 0; border: 0; border-top: 1px solid #1e293b;">', unsafe_allow_html=True)
 
-        # Lane counts bar
+    # ─── LIVE FEED (Primary Intelligence) ────────────────────────────────────
+    st.markdown('<p class="section-head">Live Intelligence Feed</p>', unsafe_allow_html=True)
+    
+    feed_container = st.container()
+    with feed_container:
+        if st.session_state.frame_rgb is not None:
+            # Using a slightly custom style to emphasize the "square" feel if possible, 
+            # though st.image follows source aspect ratio. 
+            st.image(st.session_state.frame_rgb, use_container_width=True, channels="RGB")
+        elif st.session_state.running:
+            st.markdown(
+                '<div style="width:100%; aspect-ratio:1/1; max-height:600px; background:#0d1320; border:1px dashed #1e293b; border-radius:12px;'
+                'display:flex; align-items:center; justify-content:center;'
+                'color:#00ffe0; font-size:1rem; letter-spacing:4px; font-family:\'JetBrains Mono\',monospace;">'
+                'INITIALIZING SENSORS...</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div style="width:100%; aspect-ratio:1/1; max-height:600px; background:#0d1320; border:1px dashed #1e293b; border-radius:12px;'
+                'display:flex; align-items:center; justify-content:center;'
+                'color:#334155; font-size:1rem; letter-spacing:4px;">SYSTEM OFFLINE</div>',
+                unsafe_allow_html=True
+            )
+
+    st.markdown('<div style="margin-top:25px;"></div>', unsafe_allow_html=True)
+
+    # ─── ANALYTICS & DISPATCH (50/50 Ratio) ──────────────────────────────────
+    col_left, col_right = st.columns([1, 1])
+
+    # ── LEFT: Charts & Analytics ──
+    with col_left:
+        # Lane counts bar -> NUMBERS
         st.markdown('<p class="section-head">Live Lane Density</p>', unsafe_allow_html=True)
-        lc  = st.session_state.lane_counts
+        lc = st.session_state.lane_counts
         lanes_display = ["top_road", "bottom_road", "left_road", "right_road"]
         bar_colors    = ["#00ffe0", "#818cf8", "#f97316", "#f43f5e"]
+        
+        n_cols = st.columns(4)
+        for i, lane in enumerate(lanes_display):
+            val = lc.get(lane, 0)
+            n_cols[i].markdown(f"""
+                <div style="text-align:center; background:#0d131a; border:1px solid #1e293b; border-radius:6px; padding:10px 4px;">
+                    <div style="color:{bar_colors[i]}; font-size:1.6rem; font-family:'JetBrains Mono'; font-weight:700; line-height:1;">{val}</div>
+                    <div style="color:#475569; font-size:0.6rem; letter-spacing:1px; margin-top:4px;">{lane.replace('_road','').upper()}</div>
+                </div>
+            """, unsafe_allow_html=True)
 
-        fig_bar = go.Figure()
-        fig_bar.add_trace(go.Bar(
-            x=[l.replace("_road","").upper() for l in lanes_display],
-            y=[lc.get(l, 0) for l in lanes_display],
-            marker_color=bar_colors,
-            marker_line_width=0,
-        ))
-        fig_bar.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            margin=dict(l=0, r=0, t=4, b=4), height=160,
-            font=dict(family="JetBrains Mono", color="#64748b", size=10),
-            xaxis=dict(showgrid=False, color="#475569"),
-            yaxis=dict(showgrid=True, gridcolor="#1e293b", color="#475569", dtick=1),
-        )
-        st.plotly_chart(fig_bar, width="stretch", config={"displayModeBar": False})
+        # Rolling count history -> NUMBERS (LANE TOTALS)
+        st.markdown('<p class="section-head">Historical Lane Totals</p>', unsafe_allow_html=True)
+        lt = st.session_state.stats.get("lane_totals", {})
+        h_cols = st.columns(4)
+        for i, lane in enumerate(lanes_display):
+            val = lt.get(lane, 0)
+            h_cols[i].markdown(f"""
+                <div style="text-align:center; background:#0d131a; border:1px solid #1e293b; border-radius:6px; padding:10px 4px;">
+                    <div style="color:{bar_colors[i]}; font-size:1.6rem; font-family:'JetBrains Mono'; font-weight:700; line-height:1;">{val}</div>
+                    <div style="color:#475569; font-size:0.6rem; letter-spacing:1px; margin-top:4px;">{lane.replace('_road','').upper()} TOTAL</div>
+                </div>
+            """, unsafe_allow_html=True)
 
-        # Rolling count history (sparklines per lane)
-        st.markdown('<p class="section-head">Count History</p>', unsafe_allow_html=True)
-        hist = st.session_state.count_history
-        fig_line = go.Figure()
-        for lane, color in zip(lanes_display, bar_colors):
-            data = list(hist.get(lane, []))
-            if data:
-                fig_line.add_trace(go.Scatter(
-                    y=data, mode="lines", name=lane.replace("_road","").upper(),
-                    line=dict(color=color, width=1.5),
-                    fill="tozeroy", fillcolor=color.replace(")", ",0.06)").replace("rgb","rgba") if color.startswith("rgb") else f"rgba({int(color[1:3], 16)}, {int(color[3:5], 16)}, {int(color[5:7], 16)}, 0.06)",
-                ))
-        fig_line.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            margin=dict(l=0, r=0, t=4, b=4), height=160,
-            font=dict(family="JetBrains Mono", color="#64748b", size=10),
-            xaxis=dict(showgrid=False, color="#475569", title=""),
-            yaxis=dict(showgrid=True, gridcolor="#1e293b", color="#475569"),
-            legend=dict(orientation="h", y=-0.2, font=dict(size=9)),
-            showlegend=True,
-        )
-        st.plotly_chart(fig_line, width="stretch", config={"displayModeBar": False})
-
-        # Direction distribution
+        # Direction distribution -> NUMBERS
         st.markdown('<p class="section-head">Direction Distribution</p>', unsafe_allow_html=True)
-        dirs = s["direction_counts"]
+        dirs = st.session_state.stats["direction_counts"]
         if dirs:
-            dir_labels = list(dirs.keys())
-            dir_vals   = [dirs[d] for d in dir_labels]
-            dir_colors = ["#00ffe0","#818cf8","#f97316","#f43f5e","#4ade80","#60a5fa"]
-            fig_pie = go.Figure(go.Pie(
-                labels=dir_labels, values=dir_vals,
-                hole=0.6,
-                marker=dict(colors=dir_colors[:len(dir_labels)]),
-                textfont=dict(family="JetBrains Mono", size=9, color="#fff"),
-            ))
-            fig_pie.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0,r=0,t=0,b=0), height=140,
-                legend=dict(orientation="h", font=dict(size=8, color="#64748b"), y=-0.1),
-                showlegend=True,
-            )
-            st.plotly_chart(fig_pie, width="stretch", config={"displayModeBar": False})
+            d_cols = st.columns(min(len(dirs), 3))
+            for i, (d_label, d_val) in enumerate(list(dirs.items())[:6]):
+                col_idx = i % 3
+                d_cols[col_idx].markdown(f"""
+                    <div style="margin-bottom:8px; padding:6px 10px; background:#0d131a; border-left:3px solid #60a5fa; border-radius:0 4px 4px 0;">
+                        <span style="color:#94a3b8; font-size:0.7rem; text-transform:uppercase;">{d_label}:</span>
+                        <span style="color:#fff; font-family:'JetBrains Mono'; font-weight:700; float:right;">{d_val}</span>
+                    </div>
+                """, unsafe_allow_html=True)
         else:
-            st.markdown('<div style="color:#334155;font-size:0.75rem;text-align:center;padding:12px;">Waiting for data…</div>', unsafe_allow_html=True)
+            st.markdown('<div style="color:#334155;font-size:0.75rem;text-align:center;padding:12px;">Waiting for analytical data…</div>', unsafe_allow_html=True)
 
 
-    # ── RIGHT: Alerts + event log ─────────────────────────────────────────────────
+    # ── RIGHT: Alerts & Logs ──
     with col_right:
         # ── Emergency section ──
         st.markdown('<p class="section-head">Emergency Dispatch</p>', unsafe_allow_html=True)
-        
-        # Persistence: show for 10 seconds after last detection
         show_emerg = False
         if st.session_state.persisted_emerg and (time.time() - st.session_state.last_emerg_time < 10):
             show_emerg = True
@@ -728,8 +745,6 @@ def render_dashboard_ui():
 
         # ── Crash section ──
         st.markdown('<p class="section-head">Crash Alerts</p>', unsafe_allow_html=True)
-        
-        # Persistence: show for 10 seconds after last detection
         show_crash = False
         cr = st.session_state.persisted_crash
         if cr and (time.time() - st.session_state.last_crash_time < 10):
@@ -749,11 +764,9 @@ def render_dashboard_ui():
                 unsafe_allow_html=True
             )
 
-
-
         # Event log
         st.markdown('<p class="section-head">Event Log</p>', unsafe_allow_html=True)
-        log_html = '<div style="max-height:280px;overflow-y:auto;">'
+        log_html = '<div style="max-height:480px;overflow-y:auto;">'
         for ev in list(st.session_state.event_log)[:25]:
             css_cls = ev["type"]
             icon    = "💥" if ev["type"] == "crash" else ("🚨" if ev["type"] == "emerg" else "·")
