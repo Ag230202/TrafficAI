@@ -1,190 +1,73 @@
 """
 detector.py
 -----------
-YOLOv8n vehicle detection module.
-
-Responsibilities:
-  - Load YOLOv8n model once and reuse across frames
-  - Run inference on preprocessed frames
-  - Filter detections by class and confidence
-  - Return structured detection results per frame
+Advanced Vehicle Detection using YOLOv8-Medium and ByteTrack.
 """
 
 import numpy as np
+import cv2
 
-# ─────────────────────────────────────────────
-#  DETECTION CONFIGURATION
-# ─────────────────────────────────────────────
 DETECTOR_CONFIG = {
-    # YOLOv8 model variant — "yolov8n.pt" is smallest (best for CPU)
-    "model_path": "yolov8n.pt",
-
-    # Minimum confidence to keep a detection
-    "confidence_threshold": 0.4,
-
-    # 2=car, 3=motorcycle, 5=bus, 7=truck (Standard COCO)
-    # If using custom trained yolov8_emergency.pt, update these to match your dataset.yaml
-    # e.g., {0, 1, 2, 3, 4, 5} where 4=ambulance, 5=fire_truck
-    "target_class_ids": {2, 3, 5, 7},
-
-    # Human-readable labels for each class ID we care about
-    # Update these if you train a custom model:
-    # 0: "car", 1: "motorcycle", 2: "bus", 3: "truck", 4: "ambulance", 5: "fire_truck"
-    "class_labels": {
-        2: "car",
-        3: "motorcycle",
-        5: "bus",
-        7: "truck",
-    },
-
-    # Inference image size (must match preprocessing resize)
-    "imgsz": 640,
-
-    # Force CPU inference — set device="cpu" always
+    "model_path": "yolov8m.pt",
+    "confidence_threshold": 0.04, # Extreme sensitivity
     "device": "cpu",
-
-    # Suppress YOLO console output during inference
-    "verbose": False,
+    "imgsz": 1280,
+    "track_buffer": 60,
+    "track_low_thresh": 0.04,
+    "iou": 0.9 # Allow boxes to overlap (Essential for dense traffic)
 }
 
-
 class VehicleDetector:
-    """
-    Wraps YOLOv8n for vehicle-only detection.
-
-    Usage:
-        detector = VehicleDetector()
-        detections = detector.detect(frame, frame_index)
-    """
-
     def __init__(self, config: dict = None):
+        from ultralytics import YOLO
         cfg = config or DETECTOR_CONFIG
-        self.conf_threshold   = cfg.get("confidence_threshold", 0.4)
-        self.target_class_ids = cfg.get("target_class_ids", {2, 3, 5, 7})
-        self.class_labels     = cfg.get("class_labels", {})
-        self.imgsz            = cfg.get("imgsz", 640)
-        self.device           = cfg.get("device", "cpu")
-        self.verbose          = cfg.get("verbose", False)
+        self.config = cfg
+        self.model = YOLO(cfg.get("model_path", "yolov8m.pt"))
+        self.device = cfg.get("device", "cpu")
+        self.model.to(self.device)
+        
+        # COCO Vehicle Classes: 2=car, 3=motorcycle, 5=bus, 7=truck
+        self.target_classes = [2, 3, 5, 7]
+        self.class_map = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
-        # Load model once — kept in memory across all frames
-        self.model = self._load_model(cfg.get("model_path", "yolov8n.pt"))
-
-    # ─────────────────────────────────────────
-    #  MODEL LOADING
-    # ─────────────────────────────────────────
-    def _load_model(self, model_path: str):
+    def detect(self, frame_rgb: np.ndarray, frame_index: int = 0) -> list:
         """
-        Loads YOLOv8 model from file or downloads if not present.
-        Model is loaded once and reused — no repeated disk I/O.
+        Runs YOLOv8 tracking (ByteTrack) on the frame.
         """
-        try:
-            from ultralytics import YOLO
-            print(f"[Detector] Loading model: {model_path} on {self.device}")
-            model = YOLO(model_path)
-            model.to(self.device)
-            print("[Detector] Model loaded successfully.")
-            return model
-        except ImportError:
-            raise ImportError(
-                "ultralytics package not found. "
-                "Install it with: pip install ultralytics"
-            )
-        except Exception as e:
-            raise RuntimeError(f"[Detector] Failed to load model '{model_path}': {e}")
-
-    # ─────────────────────────────────────────
-    #  INFERENCE
-    # ─────────────────────────────────────────
-    def detect(self, frame: np.ndarray, frame_index: int = 0) -> list:
-        """
-        Runs YOLOv8 inference on a single preprocessed frame.
-
-        frame: RGB np.ndarray (H, W, 3) — output from preprocessing pipeline
-        frame_index: int — used for logging/debugging only
-
-        Returns: list of detection dicts:
-            {
-                "bbox":       [x1, y1, x2, y2],
-                "class":      str,
-                "class_id":   int,
-                "confidence": float
-            }
-        """
-        # Run inference — single frame, no batching
-        results = self.model.predict(
-            source=frame,
-            imgsz=self.imgsz,
-            conf=self.conf_threshold,
+        results = self.model.track(
+            frame_rgb,
+            persist=True,
+            conf=self.config.get("confidence_threshold", 0.04),
+            iou=self.config.get("iou", 0.9),
+            imgsz=self.config.get("imgsz", 1280),
+            classes=self.target_classes,
+            verbose=False,
             device=self.device,
-            verbose=self.verbose,
+            tracker="bytetrack.yaml"
         )
+        
+        return self._parse_tracking_results(results[0])
 
-        # Extract and filter detections
-        detections = self._parse_results(results)
-
-        if self.verbose:
-            print(f"[Detector] Frame {frame_index}: {len(detections)} vehicle(s) detected.")
-
-        return detections
-
-    # ─────────────────────────────────────────
-    #  RESULT PARSING
-    # ─────────────────────────────────────────
-    def _parse_results(self, results) -> list:
-        """
-        Parses YOLO result objects into a clean list of detection dicts.
-
-        Filters:
-          - Only keeps classes in target_class_ids
-          - Confidence already filtered by model.predict(conf=...)
-
-        Returns list of detection dicts.
-        """
+    def _parse_tracking_results(self, result) -> list:
         detections = []
+        if not result.boxes:
+            return detections
 
-        # results is a list of Result objects (one per image)
-        for result in results:
-            boxes = result.boxes  # ultralytics Boxes object
-
-            if boxes is None or len(boxes) == 0:
-                continue
-
-            for box in boxes:
-                class_id = int(box.cls[0].item())
-
-                # Skip non-vehicle classes
-                if class_id not in self.target_class_ids:
-                    continue
-
-                confidence = float(box.conf[0].item())
-
-                # Extra confidence guard (model.predict already filters,
-                # but keeps this layer explicit for safety)
-                if confidence < self.conf_threshold:
-                    continue
-
-                # Extract bounding box as integers
-                x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
-
-                label = self.class_labels.get(class_id, f"class_{class_id}")
-
-                detections.append({
-                    "bbox":       [x1, y1, x2, y2],
-                    "class":      label,
-                    "class_id":   class_id,
-                    "confidence": round(confidence, 4),
-                })
-
+        for box in result.boxes:
+            coords = box.xyxy[0].cpu().numpy()
+            track_id = int(box.id[0].item()) if box.id is not None else -1
+            conf = float(box.conf[0].item())
+            cls_id = int(box.cls[0].item())
+            
+            detections.append({
+                "bbox": [int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])],
+                "confidence": conf,
+                "class": self.class_map.get(cls_id, "vehicle"),
+                "id": track_id
+            })
+            
         return detections
 
-    # ─────────────────────────────────────────
-    #  UTILITY
-    # ─────────────────────────────────────────
-    def get_supported_classes(self) -> dict:
-        """Returns the class ID → label mapping used by this detector."""
-        return dict(self.class_labels)
-
-    def set_confidence_threshold(self, threshold: float):
-        """Allows runtime adjustment of the confidence threshold."""
-        self.conf_threshold = max(0.0, min(1.0, threshold))
-        print(f"[Detector] Confidence threshold updated to: {self.conf_threshold}")
+    @property
+    def class_names(self) -> dict:
+        return self.class_map

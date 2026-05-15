@@ -246,10 +246,51 @@ def reduce_noise(frame: np.ndarray, kernel_size: tuple = (3, 3)) -> np.ndarray:
     """
     Applies Gaussian Blur to reduce noise.
 
-    kernel_size: must be a tuple of two odd positive integers, e.g. (3,3) or (5,5).
-    Larger kernel = more smoothing, but slower.
+    kernel_size: must be an odd positive integer (e.g. 3, 5).
+    Larger kernel = more smoothing.
     """
-    return cv2.GaussianBlur(frame, kernel_size, 0)
+    # Median blur is better for removing "scan line" noise in the footage
+    if isinstance(kernel_size, tuple):
+        kernel_size = kernel_size[0]
+    return cv2.medianBlur(frame, kernel_size)
+
+def apply_road_mask(frame):
+    """
+    Masks out non-road areas to help the AI focus.
+    Coordinates based on your 1280x720 perspective.
+    """
+    h, w = frame.shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+    
+    # Professional ROI polygon (Trees, Sky, Buildings excluded)
+    pts = np.array([
+        [430, 220], [680, 140], [1280, 400], [1280, 720], 
+        [0, 720], [0, 400]
+    ], np.int32)
+    
+    cv2.fillPoly(mask, [pts], 255)
+    return cv2.bitwise_and(frame, frame, mask=mask)
+
+def preprocess_for_yolo(frame_bgr):
+    """
+    Shadow-Vision (Gamma Correction) + Subtle Contrast.
+    """
+    # 1. Gamma Correction (Brightens shadows where cars are missed)
+    gamma = 1.5
+    invGamma = 1.0 / gamma
+    table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+    processed = cv2.LUT(frame_bgr, table)
+
+    # 2. Subtle CLAHE
+    lab = cv2.cvtColor(processed, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=1.2, tileGridSize=(8,8))
+    cl = clahe.apply(l)
+    limg = cv2.merge((cl,a,b))
+    processed = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+    
+    # 3. Final conversion to RGB
+    return cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
 
 
 # ─────────────────────────────────────────────

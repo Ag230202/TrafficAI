@@ -2,21 +2,16 @@ import cv2
 import numpy as np
 
 # ---- IMAGE PATH ----
-img = cv2.imread(r"D:\Traffic_AI\Traffic_Footage_Sanity\ezgif-frame-006.jpg")
+# Using the footage where you just picked the coordinates
+img = cv2.imread(r"D:\Traffic_AI\aa\frame_000001.png")
 
-# ---- LANE CONFIG ----
+# ---- FINAL MANUAL COORDINATES ----
 LANE_CONFIG = {
-    "left_road": [(8,399),(397,256),(492,720),(0,720)],
-    "bottom_road": [(1083,411),(1269,635),(1277,714),(801,717)],
-    "right_road": [(1005,81),(1100,134),(1100,400),(1028,304),(784,164)],
-    "top_road": [(405,51),(466,40),(723,159),(455,209)]
+    "left_road": [(437, 222), (621, 698), (0, 720), (0, 416)],
+    "top_road": [(455, 198), (685, 144), (509, 53), (414, 67)],
+    "right_road": [(782, 156), (1033, 317), (1078, 139), (1009, 81)],
+    "bottom_road": [(1056, 359), (650, 708), (1209, 706), (1277, 636)]
 }
-
-# ---- OPTIONAL GLOBAL SHIFT ----
-dx, dy = 0, 0  # change if needed
-
-for lane in LANE_CONFIG:
-    LANE_CONFIG[lane] = [(x+dx, y+dy) for (x,y) in LANE_CONFIG[lane]]
 
 # ---- COLORS ----
 colors = {
@@ -27,48 +22,46 @@ colors = {
 }
 
 # ---- DRAW ----
-output = img.copy()
+if img is not None:
+    output = img.copy()
 
-for name, pts in LANE_CONFIG.items():
-    pts_np = np.array(pts, np.int32)
+    for name, pts in LANE_CONFIG.items():
+        pts_np = np.array(pts, np.int32)
 
-    # transparent fill
-    overlay = output.copy()
-    cv2.fillPoly(overlay, [pts_np], colors[name])
-    output = cv2.addWeighted(overlay, 0.3, output, 0.7, 0)
+        # transparent fill
+        overlay = output.copy()
+        cv2.fillPoly(overlay, [pts_np], colors[name])
+        output = cv2.addWeighted(overlay, 0.3, output, 0.7, 0)
 
-    # border
-    cv2.polylines(output, [pts_np], True, colors[name], 2)
+        # border
+        cv2.polylines(output, [pts_np], True, colors[name], 2)
 
-    # label
-    x, y = pts[0]
-    cv2.putText(output, name, (x, y-10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, colors[name], 2)
+        # label
+        x, y = pts[0]
+        cv2.putText(output, name, (x, y-10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, colors[name], 2)
 
-# ---- SHOW ----
-cv2.imshow("Lane Verification", output)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+    # ---- SHOW ----
+    cv2.imshow("Final Lane Verification", output)
+    print("[INFO] Showing final lanes. Press any key to close.")
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+else:
+    print("[ERROR] Could not find the image path.")
 
-# for getting points manually, use the code below
 
-# import cv2
-
+# --- MANUAL POINT PICKER (Keep for future recalibration) ---
 # points = []
-# img = cv2.imread(r"D:\Traffic_AI\Traffic_Footage_Sanity\ezgif-frame-006.jpg")
-
 # def click(event, x, y, flags, param):
 #     if event == cv2.EVENT_LBUTTONDOWN:
 #         points.append((x, y))
 #         print(points)
-
-#         # draw point
 #         cv2.circle(img, (x,y), 5, (0,255,0), -1)
 #         cv2.imshow("img", img)
-
-# cv2.imshow("img", img)
-# cv2.setMouseCallback("img", click)
-# cv2.waitKey(0)
-# cv2.destroyAllWindows()
-
-# print("FINAL POINTS:", points)
+#
+# if img is not None:
+#     cv2.imshow("img", img)
+#     cv2.setMouseCallback("img", click)
+#     cv2.waitKey(0)
+#     cv2.destroyAllWindows()
+#     print("FINAL POINTS:", points)

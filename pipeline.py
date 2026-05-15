@@ -31,41 +31,23 @@ def build_frame_output(
     lane_mapper: LaneMapper,
     emergency_light_detector: EmergencyLightDetector,
     collision_detector: CollisionDetector,
+    crash_detector=None
 ) -> dict:
-    """
-    Assembles the final structured output dict for one frame.
-
-    frame_bgr: original BGR frame (before colour conversion) — used by
-               EmergencyLightDetector for HSV colour analysis
-    frame_rgb: RGB frame (after preprocessing) — used for debug display
-
-    Returns:
-    {
-        "frame_id":      int,
-        "lane_counts":   {"lane_name": int, ...},
-        "vehicles":      [ { "id", "lane", "bbox", "class",
-                             "confidence", "direction" }, ... ],
-        "emergency_lane": list,
-        "collisions":    list of collision dicts,
-        "debug_frame":   np.ndarray (RGB)
-    }
-    """
     import cv2
-
     vehicles = []
 
     for track in active_tracks:
-        lane = lane_mapper.assign_lane(track.bbox)
+        # ByteTrack returns dictionaries
+        bbox = track.get("bbox")
+        lane = lane_mapper.assign_lane(bbox)
 
         vehicles.append({
-            "id":            track.track_id,
+            "id":            track.get("id"),
             "lane":          lane,
-            "bbox":          track.bbox,
-            "class":         track.cls,
-            "confidence":    track.conf,
-            "direction":     track.direction,
-            "centroid":      track.centroid,
-            "prev_centroid": track.prev_centroid,
+            "bbox":          bbox,
+            "class":         track.get("class"),
+            "confidence":    track.get("confidence"),
+            "direction":     "stable", # ByteTrack handles stability
         })
 
     # ── YOLO-based emergency detection (size + speed heuristic) ─
@@ -155,7 +137,6 @@ def build_frame_output(
         "emergency_veh_ids":   all_emergency_vehicle_ids,
         "collisions":          collisions,
         "debug_frame":         debug_frame,
-        "raw_frame":           frame_bgr,
     }
 
 
@@ -175,23 +156,26 @@ def run_pipeline(
     print("[Pipeline] Initialising modules...")
 
     detector            = VehicleDetector(detector_config or DETECTOR_CONFIG)
-    tracker             = CentroidTracker(tracker_config  or TRACKER_CONFIG)
     lane_mapper         = LaneMapper(lane_config          or LANE_CONFIG)
     emergency_light_det = EmergencyLightDetector()
     collision_det       = CollisionDetector()
 
     print("[Pipeline] All modules ready. Starting frame processing...\n")
+    
+    # --- Cumulative Stats State ---
+    stats = {
+        "total_vehicles": 0,
+        "lane_totals": {},
+        "seen_vehicle_ids": set(),
+        "seen_entries": set()
+    }
 
-    # We need the BGR frame for emergency light detection, but
-    # preprocess_pipeline yields RGB. So we load raw BGR here first,
-    # then preprocess a copy for YOLO.
     import cv2
     import os
-
     cfg = preprocess_config or PREPROCESS_CONFIG
     frame_skip   = cfg.get("frame_skip", 3)
-    resize_w     = cfg.get("resize_width", 640)
-    resize_h     = cfg.get("resize_height", 480)
+    resize_w     = cfg.get("resize_width", 1280)
+    resize_h     = cfg.get("resize_height", 720)
     valid_ext    = (".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif")
 
     filenames = sorted(
@@ -199,10 +183,7 @@ def run_pipeline(
         if f.lower().endswith(valid_ext)
     )
 
-    from preprocessing import (
-        apply_roi, adjust_brightness_contrast, apply_clahe,
-        reduce_noise, convert_bgr_to_rgb
-    )
+    from preprocessing import preprocess_for_yolo
 
     use_clahe = cfg.get("use_clahe", False)
 
@@ -215,45 +196,33 @@ def run_pipeline(
         if frame_bgr is None:
             continue
 
-        # Resize BGR frame (used by emergency light detector)
-        frame_bgr = cv2.resize(frame_bgr, (resize_w, resize_h),
-                                interpolation=cv2.INTER_LINEAR)
+        frame_bgr = cv2.resize(frame_bgr, (resize_w, resize_h))
+        frame_rgb = preprocess_for_yolo(frame_bgr)
 
-        # Build preprocessed RGB frame for YOLO
-        frame_rgb = frame_bgr.copy()
-        rois = cfg.get("rois", [])
-        if rois:
-            frame_rgb = apply_roi(frame_rgb, rois)
+        # 1. Detect & Track with ByteTrack
+        active_tracks = detector.detect(frame_rgb, frame_index)
 
-        if use_clahe:
-            frame_rgb = apply_clahe(
-                frame_rgb,
-                clip_limit=cfg.get("clahe_clip_limit", 2.0),
-                tile_grid=cfg.get("clahe_tile_grid", (8, 8)),
-            )
-        else:
-            frame_rgb = adjust_brightness_contrast(
-                frame_rgb,
-                alpha=cfg.get("alpha", 1.2),
-                beta=cfg.get("beta", 15),
-            )
-
-        frame_rgb = reduce_noise(frame_rgb, cfg.get("blur_kernel", (3, 3)))
-        frame_rgb = convert_bgr_to_rgb(frame_rgb)
-
-        # 1. Detect with YOLO
-        raw_detections = detector.detect(frame_rgb, frame_index)
-        # print(f"[Pipeline] Frame {frame_index}: detections={len(raw_detections)}")
-
-        # 2. Track
-        active_tracks = tracker.update(raw_detections)
-        # print(f"[Pipeline] Frame {frame_index}: tracks={len(active_tracks)}")
-
-        # 3. Assemble output (both BGR and RGB passed)
+        # 2. Assemble output (both BGR and RGB passed)
         frame_output = build_frame_output(
             frame_index, frame_bgr, frame_rgb,
             active_tracks, lane_mapper,
             emergency_light_det, collision_det,
         )
 
+        # 3. Update Cumulative Stats (Line-Crossing Style)
+        for v in frame_output["vehicles"]:
+            vid = v.get("id")
+            lane = v.get("lane")
+            if vid is not None and vid != -1 and lane:
+                if vid not in stats["seen_vehicle_ids"]:
+                    stats["seen_vehicle_ids"].add(vid)
+                    stats["total_vehicles"] += 1
+                
+                # Flow entry tracking
+                lane_key = f"{vid}_{lane}"
+                if lane_key not in stats["seen_entries"]:
+                    stats["seen_entries"].add(lane_key)
+                    stats["lane_totals"][lane] = stats["lane_totals"].get(lane, 0) + 1
+        
+        frame_output["cumulative_stats"] = stats.copy()
         yield frame_output

@@ -240,16 +240,13 @@ st.markdown("""
 # ─────────────────────────────────────────────────────────────────────────────
 #  SESSION STATE DEFAULTS
 # ─────────────────────────────────────────────────────────────────────────────
-def _init_state():
+def _init_state(force_reset=False):
     defaults = {
         "running":          False,
         "stop_flag":        False,
         "frame_rgb":        None,
         "lane_counts":      {},
         "signal_output":    None,
-        "crash_report":     None,
-        "emergency_lanes":  [],
-        "collisions":       [],
         "stats": {
             "total_frames":     0,
             "total_vehicles":   0,
@@ -258,21 +255,15 @@ def _init_state():
             "direction_counts": {},
             "lane_totals":      {},
             "seen_vehicle_ids": set(),
-            "seen_in_lane":     {},
-            "seen_in_direction":{},
+            "seen_entries":     set(), # Essential for new counting logic
         },
         "event_log":        deque(maxlen=60),
-        "count_history":    defaultdict(lambda: deque(maxlen=80)),
         "fps_deque":        deque(maxlen=20),
         "current_fps":      0.0,
         "frames_processed": 0,
-        "last_crash_time":  0.0,
-        "last_emerg_time":  0.0,
-        "persisted_crash":  None,
-        "persisted_emerg":  [],
     }
     for k, v in defaults.items():
-        if k not in st.session_state:
+        if k not in st.session_state or force_reset:
             st.session_state[k] = v
 
 _init_state()
@@ -299,17 +290,23 @@ def pipeline_thread(source_path: str, config: dict):
             "resize_width":  1280,
             "resize_height": 720,
             "frame_skip":    config.get("frame_skip", 3),
-            "use_clahe":     config.get("use_clahe", True),
+            "rois":          [],
+            "alpha":         config.get("alpha", 1.2),
+            "beta":          config.get("beta", 15),
+            "blur_kernel":   (3, 3),
+            "use_clahe":     config.get("use_clahe", False),
+            "clahe_clip_limit": 2.0,
+            "clahe_tile_grid":  (8, 8)
         }
         detector_cfg = {
             **DETECTOR_CONFIG,
-            "confidence_threshold": config.get("conf_thresh", 0.20),
-            "imgsz": config.get("imgsz", 1280),
+            "confidence_threshold": config.get("conf_thresh", 0.10),
+            "imgsz": 640, # 640 is the sweet spot for YOLOv8 foreground detection
         }
         tracker_cfg = {
             **TRACKER_CONFIG,
-            "max_distance": 80,
-            "max_lost_frames": 10,
+            "max_distance": 100,
+            "max_lost_frames": 15,
             "min_hits": 1,
         }
         
@@ -322,7 +319,7 @@ def pipeline_thread(source_path: str, config: dict):
         alert_disp  = AlertDispatcher()
         sig_ctrl    = SignalController(SIGNAL_CONFIG)
 
-        from preprocessing import apply_clahe, convert_bgr_to_rgb
+        from preprocessing import apply_clahe, convert_bgr_to_rgb, reduce_noise, adjust_brightness_contrast
 
         def frames_from_folder(folder_path):
             valid_ext = (".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif")
@@ -337,14 +334,18 @@ def pipeline_thread(source_path: str, config: dict):
 
         t_prev = time.time()
         for idx, frame_bgr in frames_from_folder(source_path):
-            frame_rgb = frame_bgr.copy()
-            if preprocess_cfg["use_clahe"]:
-                frame_rgb = apply_clahe(frame_rgb)
-            frame_rgb = convert_bgr_to_rgb(frame_rgb)
+            # --- Professional Vision Pipeline ---
+            from preprocessing import preprocess_for_yolo
+            frame_rgb = preprocess_for_yolo(frame_bgr)
+            # ------------------------------------
 
-            raw_dets = detector.detect(frame_rgb, idx)
-            active_tracks = tracker.update(raw_dets)
-            frame_out = build_frame_output(idx, frame_bgr, frame_rgb, active_tracks, lane_mapper, em_detector, col_detector)
+            active_tracks = detector.detect(frame_rgb, idx)
+            
+            frame_out = build_frame_output(
+                idx, frame_bgr, frame_rgb,
+                active_tracks, lane_mapper,
+                em_detector, col_detector, crash_det
+            )
             
             crash_report = crash_det.update(frame_out)
             is_new_crash = False
@@ -365,21 +366,38 @@ def pipeline_thread(source_path: str, config: dict):
             st.session_state.fps_deque.append(fps)
             st.session_state.current_fps = sum(st.session_state.fps_deque) / len(st.session_state.fps_deque)
 
-            # Stats logic
+            # --- High-Accuracy Validation Engine ---
             s = st.session_state.stats
-            s["total_frames"] += 1
-            for v in frame_out["vehicles"]:
-                vid = v.get("id")
-                if vid and vid not in s["seen_vehicle_ids"]:
-                    s["seen_vehicle_ids"].add(vid)
-                    s["total_vehicles"] += 1
-                    d = v.get("direction", "unknown")
-                    s["direction_counts"][d] = s["direction_counts"].get(d, 0) + 1
-                    lane = v.get("lane", "unknown")
-                    s["lane_totals"][lane] = s["lane_totals"].get(lane, 0) + 1
             
-            if is_new_crash: s["total_collisions"] += 1
-            if frame_out.get("emergency_lane"): s["total_emergency"] += 1
+            if "id_frame_counts" not in st.session_state:
+                st.session_state.id_frame_counts = {}
+            
+            for v in frame_out["vehicles"]:
+                vid, lane = v.get("id"), v.get("lane")
+                if vid is not None and vid != -1 and lane:
+                    st.session_state.id_frame_counts[vid] = st.session_state.id_frame_counts.get(vid, 0) + 1
+                    
+                    # Faster validation (5 frames)
+                    if st.session_state.id_frame_counts[vid] >= 5:
+                        if vid not in s["seen_vehicle_ids"]:
+                            s["seen_vehicle_ids"].add(vid)
+                            s["total_vehicles"] += 1
+                        
+                        lane_key = f"{vid}_{lane}"
+                        if lane_key not in s.get("seen_entries", set()):
+                            if "seen_entries" not in s: s["seen_entries"] = set()
+                            s["seen_entries"].add(lane_key)
+                            s["lane_totals"][lane] = s["lane_totals"].get(lane, 0) + 1
+            
+            st.session_state.stats = s
+            st.session_state.lane_counts = frame_out["lane_counts"]
+            st.session_state.frame_rgb = frame_out.get("debug_frame").copy()
+            st.session_state.signal_output = (sig_ctrl.update(frame_out["lane_counts"], frame_out["emergency_lane"], [], idx)).to_dict()
+            st.session_state.frames_processed = idx
+            # ----------------------------------------
+
+            if is_new_crash: st.session_state.stats["total_collisions"] += 1
+            if frame_out.get("emergency_lane"): st.session_state.stats["total_emergency"] += 1
 
             # Log events
             ts = datetime.now().strftime("%H:%M:%S")
@@ -414,7 +432,7 @@ with st.sidebar:
     source_path = st.text_input("Frames folder path", value=default_val)
     
     st.markdown("### Detection")
-    conf_thresh = 0.2 # Hardcoded as requested
+    conf_thresh = 0.10 # Lowered to catch low-confidence silver cars
     frame_skip = st.number_input("Frame skip", 1, 30, 3)
     use_clahe = st.checkbox("CLAHE", value=True)
 

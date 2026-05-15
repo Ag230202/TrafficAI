@@ -101,7 +101,7 @@ if GLOBAL_SHIFT_X != 0 or GLOBAL_SHIFT_Y != 0:
 # ─ Detector overrides ────────────────────────────────────────────
 CUSTOM_DETECTOR_CONFIG = {
     **DETECTOR_CONFIG,
-    "confidence_threshold": 0.20,        # Balanced: 0.20 detects distant vehicles
+    "confidence_threshold": 0.10,        # Lowered to 0.10 for max coverage
                                          # while min_hits=2 in tracker filters noise.
                                          # 0.15 hallucinated, 0.30 missed vehicles.
 

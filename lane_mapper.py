@@ -39,10 +39,10 @@ import numpy as np
 
 # Coordinates are for resized frame 1280x720
 LANE_CONFIG = {
-    "left_road": [(8,399),(397,256),(492,720),(0,720)],
-    "bottom_road": [(1083,411),(1269,635),(1277,714),(801,717)],
-    "right_road": [(1005,81),(1100,134),(1100,400),(1028,304),(784,164)],
-    "top_road": [(405,51),(466,40),(723,159),(455,209)]
+    "left_road": [(437, 222), (650, 720), (0, 720), (0, 400)], # Expanded for bottom-left edge
+    "top_road": [(455, 198), (685, 144), (509, 53), (414, 67)],
+    "right_road": [(782, 156), (1033, 317), (1078, 139), (1009, 81)],
+    "bottom_road": [(1056, 359), (650, 720), (1280, 720), (1280, 600)] # Expanded for bottom-right edge
 }
 
 # Optional global shift if camera moved
