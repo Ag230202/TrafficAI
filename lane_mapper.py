@@ -39,9 +39,9 @@ import numpy as np
 
 # Coordinates are for resized frame 1280x720
 LANE_CONFIG = {
-    "left_road": [(8,399),(397,256),(492,677),(7,692)],
+    "left_road": [(8,399),(397,256),(492,720),(0,720)],
     "bottom_road": [(1083,411),(1269,635),(1277,714),(801,717)],
-    "right_road": [(1005,81),(1069,134),(1028,304),(784,164)],
+    "right_road": [(1005,81),(1100,134),(1100,400),(1028,304),(784,164)],
     "top_road": [(405,51),(466,40),(723,159),(455,209)]
 }
 
@@ -56,7 +56,7 @@ if GLOBAL_SHIFT_X != 0 or GLOBAL_SHIFT_Y != 0:
 EMERGENCY_CLASSES = {"ambulance", "fire truck", "firetruck", "fire_truck"}
 EMERGENCY_BBOX_AREA_THRESHOLD = 15000
 EMERGENCY_SPEED_THRESHOLD = 15
-MIN_LANE_VEHICLE_AREA = 1000
+MIN_LANE_VEHICLE_AREA = 300
 
 
 
@@ -90,7 +90,7 @@ class LaneMapper:
         # for points outside (closer to 0 = closer to the edge)
         best_lane = None
         best_dist = float("inf")
-        MAX_FALLBACK_DIST = 150  # pixels — don't assign if too far
+        MAX_FALLBACK_DIST = 350  # pixels — don't assign if too far
 
         for lane_name, polygon in self.lanes.items():
             poly_np = np.array(polygon, dtype=np.int32)

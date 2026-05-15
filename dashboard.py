@@ -409,16 +409,16 @@ def pipeline_thread(source_path: str, config: dict):
             raw_dets     = detector.detect(frame_rgb, frame_index)
             active_tracks= tracker.update(raw_dets)
 
-            if frame_index % (frame_skip * 5) == 0:
-                lc_debug = frame_out.get("lane_counts", {})
-                lc_str = " | ".join(f"{k}={v}" for k, v in lc_debug.items() if v > 0)
-                print(f"[DEBUG] Frame {frame_index}: YOLO={len(raw_dets)} dets, Tracks={len(active_tracks)}, Lanes: {lc_str}")
-
             frame_out = build_frame_output(
                 frame_index, frame_bgr, frame_rgb,
                 active_tracks, lane_mapper,
                 em_detector, col_detector,
             )
+
+            if frame_index % (frame_skip * 5) == 0:
+                lc_debug = frame_out.get("lane_counts", {})
+                lc_str = " | ".join(f"{k}={v}" for k, v in lc_debug.items() if v > 0)
+                print(f"[DEBUG] Frame {frame_index}: YOLO={len(raw_dets)} dets, Tracks={len(active_tracks)}, Lanes: {lc_str}")
 
             # Crash detection
             crash_report = crash_det.update(frame_out)
