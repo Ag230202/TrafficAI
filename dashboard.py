@@ -344,6 +344,7 @@ def pipeline_thread(source_path: str, config: dict):
         crash_det   = CrashDetector()
         alert_disp  = AlertDispatcher()
         sig_ctrl    = SignalController(SIGNAL_CONFIG)
+        sig_ctrl.set_frame_rate(fps=30, frame_skip=preprocess_cfg.get("frame_skip", 3))
 
         collision_logger = CollisionLogger(log_file="collision_log.txt")
         signal_logger     = SignalLogger(log_file="signal_log.txt")
@@ -383,8 +384,9 @@ def pipeline_thread(source_path: str, config: dict):
             is_new_crash = False
             if crash_report:
                 is_new_crash = alert_disp.dispatch(crash_report, frame_out.get("debug_frame"))
-
-            signal_out = sig_ctrl.update(frame_out["lane_counts"], frame_out["emergency_lane"], [], idx)
+                
+            gated_collisions = [{"lane": crash_report["lane"]}] if crash_report else []
+            signal_out = sig_ctrl.update(frame_out["lane_counts"], frame_out["emergency_lane"], gated_collisions, idx)
 
             # Log frame to logging systems
             if signal_out:
@@ -401,12 +403,8 @@ def pipeline_thread(source_path: str, config: dict):
                 print(f"  Frame {idx:>5} | [CRASH {sev}] score={score} "
                       f"lane={lane} signals={crash_report['signals']}")
 
-            # 2. Emergency print matching example_usage.py
             emerg_lane = frame_out.get("emergency_lane", [])
             emerg_ids  = frame_out.get("emergency_veh_ids", set())
-            if emerg_lane:
-                print(f"  ⚠  Frame {idx:>5} | EMERGENCY → {emerg_lane} "
-                      f"| vehicle IDs {sorted(emerg_ids)}")
 
             # --- Update local accumulators for the summary ---
             total_frames += 1
@@ -482,21 +480,26 @@ def pipeline_thread(source_path: str, config: dict):
                             s["lane_totals"][lane] = s["lane_totals"].get(lane, 0) + 1
             
             st.session_state.stats = s
-            st.session_state.lane_counts = frame_out["lane_counts"]
-            st.session_state.frame_rgb = frame_out.get("debug_frame").copy()
-            st.session_state.signal_output = (sig_ctrl.update(frame_out["lane_counts"], frame_out["emergency_lane"], [], idx)).to_dict()
-            st.session_state.frames_processed = idx
             # ----------------------------------------
 
             if is_new_crash: st.session_state.stats["total_collisions"] += 1
             if frame_out.get("emergency_lane"): st.session_state.stats["total_emergency"] += 1
 
-            # Log events
+            # Log events (deduplicated to prevent spam)
             ts = datetime.now().strftime("%H:%M:%S")
             if is_new_crash:
                 st.session_state.event_log.appendleft({"type": "crash", "ts": ts, "msg": f"CRASH: {crash_report['lane']} ({crash_report['severity']})"})
-            for em in frame_out.get("emergency_lane", []):
+            
+            if "prev_emergency_lanes" not in st.session_state:
+                st.session_state.prev_emergency_lanes = set()
+            
+            current_emerg = set(frame_out.get("emergency_lane", []))
+            new_emerg = current_emerg - st.session_state.prev_emergency_lanes
+            
+            for em in new_emerg:
                 st.session_state.event_log.appendleft({"type": "emerg", "ts": ts, "msg": f"EMERGENCY: {em}"})
+            
+            st.session_state.prev_emergency_lanes = current_emerg
 
     except Exception as e:
         traceback.print_exc()
@@ -633,15 +636,45 @@ def render_ui():
 
     t1, t2 = st.columns(2)
     with t1:
-        st.markdown('<p class="section-head">Signal State</p>', unsafe_allow_html=True)
+        st.markdown('<p class="section-head">Signal State & Timings</p>', unsafe_allow_html=True)
         sig = st.session_state.signal_output
         if sig:
+            # Timing and Phase info matching example_usage.py exactly
+            phase_id = sig.get("phase_id", 0)
+            phase_name = sig.get("phase_name", "Unknown")
+            time_left = int(sig.get("time_until_next", 0))
+            is_yellow = sig.get("is_yellow_mode", False)
+            reason = sig.get("override_reason", "standard_adaptive")
+            
+            mode_color = "#166534"
+            mode_bg = "#dcfce7"
+            if "collision" in reason:
+                mode_color = "#991b1b"
+                mode_bg = "#fee2e2"
+            elif "emergency" in reason:
+                mode_color = "#9a3412"
+                mode_bg = "#ffedd5"
+                
+            time_label = f"YELLOW {time_left}s" if is_yellow else f"GREEN {time_left}s"
+            time_class = "sig-yellow" if is_yellow else "sig-green"
+            
+            st.markdown(f"""
+            <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:12px; font-family:'JetBrains Mono', monospace; font-size:0.75rem; color:#334155; margin-bottom:12px;">
+                <div style="font-weight:700; color:#1e293b; font-size:0.8rem; margin-bottom:6px;">🔹 Phase {phase_id}: {phase_name}</div>
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                    <span class="signal-pill {time_class}" style="padding:2px 8px; font-size:0.65rem;"><span class="sig-dot"></span>{time_label}</span>
+                    <span style="font-size:0.62rem; color:{mode_color}; background:{mode_bg}; border-radius:100px; padding:2px 8px; font-weight:700;">{reason.upper()}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Render individual lane signal pills
             pills = ""
             for lane in ["top_road", "bottom_road", "left_road", "right_road"]:
                 color = "sig-green" if lane in sig.get("active_lanes", []) else ("sig-yellow" if lane in sig.get("yellow_lanes", []) else "sig-red")
                 full_name = lane.replace("_road", "").upper()
                 pills += f'<span class="signal-pill {color}"><span class="sig-dot"></span>{full_name}</span>'
-            st.markdown(f'<div class="signal-row" style="justify-content:flex-start;">{pills}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="signal-row" style="justify-content:flex-start; gap:6px;">{pills}</div>', unsafe_allow_html=True)
         else:
             st.markdown('<div style="color:#94a3b8; font-size:0.75rem; margin-top:8px;">SIGNAL OFFLINE</div>', unsafe_allow_html=True)
 
@@ -690,7 +723,13 @@ def render_ui():
 
         st.markdown('<p class="section-head">Dispatch Alerts</p>', unsafe_allow_html=True)
         if st.session_state.frames_processed > 0:
-            st.markdown('<div style="color:#166534; background:#dcfce7; border-radius:8px; padding:10px; text-align:center; font-size:0.75rem;">✓ SYSTEM CLEAR</div>', unsafe_allow_html=True)
+            s = st.session_state.stats
+            if s.get("total_collisions", 0) > 0:
+                st.markdown('<div class="alert-banner" style="justify-content:center; text-align:center;">🚨 ACCIDENT ALERT: CRASH DETECTED</div>', unsafe_allow_html=True)
+            elif s.get("total_emergency", 0) > 0:
+                st.markdown('<div class="emergency-banner" style="justify-content:center; text-align:center;">⚠️ EMERGENCY VEHICLE ACTIVE</div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div style="color:#166534; background:#dcfce7; border-radius:8px; padding:10px; text-align:center; font-size:0.75rem; font-weight:700;">✓ SYSTEM CLEAR</div>', unsafe_allow_html=True)
         else:
             st.markdown('<div style="color:#94a3b8; font-size:0.75rem; text-align:center;">Waiting for stream...</div>', unsafe_allow_html=True)
 

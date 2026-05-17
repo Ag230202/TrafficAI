@@ -135,11 +135,7 @@ class DataLogger:
         action = current_phase
 
         # ── Step 3: Retrain without Emergency Bias ───────────
-        # If this frame was driven by an emergency override, DO NOT log it.
-        # This prevents the AI from learning that it "chose" to keep a lane green 
-        # when it was actually forced to by an ambulance.
-        if signal_output and getattr(signal_output, "override_reason", None) == "emergency_preemption":
-            return
+        # Log all frames (including emergency preemption) to ensure complete data recording coverage.
 
         # ── Step 2: Balance the AI (Reward Weighting) ────────
         # Reward = -(vehicles not served + heavy starvation penalty)

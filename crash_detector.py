@@ -61,10 +61,10 @@ CRASH_DETECTOR_CONFIG = {
     "score_direction_conflict": 25,  # Two vehicles heading toward each other
 
     # ── Thresholds ──────────────────────────────────────────────
-    "iou_threshold":           0.05, # Lowered from 0.30 so ANY contact generates score
+    "iou_threshold":           0.01, # Lowered to 0.01 to match any low-level collision overlap
     "min_vanish_count":        4,    # Min IDs vanishing to score the signal
     "count_drop_threshold":    3,    # Min vehicle count drop to score signal
-    "persistence_frames":      2,    # Re-balanced to 2: catches real crashes before IDs vanish, but stops 1-frame jitter
+    "persistence_frames":      1,    # Confirms crash on the very first frame of contact for instant alerting
 
     # ── Confidence bands ────────────────────────────────────────
     "threshold_possible":      50,   # Score ≥ 50: possible crash, log only

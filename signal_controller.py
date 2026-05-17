@@ -60,7 +60,7 @@ SIGNAL_CONFIG = {
     "max_wait_cycles":           3,       # Promote a lane after being skipped this many times
     
     # ── Collision handling ──────────────────────────────────────
-    "collision_red_timeout":    5,       # Frames to keep lane red after collision
+    "collision_red_timeout":    1800,    # Keep lane red for 1800 frames (3 mins) after collision
     "enable_collision_override": True,   # Hard-stop traffic into collision zone
     
     # ── Phase definitions (North-South / East-West quad) ────────
@@ -269,8 +269,9 @@ class SignalController:
                     self.state.collision_cooldown[lane] = \
                         self.config.get("collision_red_timeout", 5)
         
-        # ── Check for emergency preemption ───────────────────────
-        if self.config.get("emergency_preemption", True) and emergency_lane:
+        # ── Check for emergency preemption (bypassed if collision is active) ──
+        collision_active = len(self.state.collision_cooldown) > 0
+        if self.config.get("emergency_preemption", True) and emergency_lane and not collision_active:
             # Immediate phase switch to first emergency lane's phase
             output = self._handle_emergency_preemption(
                 emergency_lane, lane_counts, frame_id
@@ -335,7 +336,7 @@ class SignalController:
             if target_phase_id is not None:
                 self.state.target_phase_id = target_phase_id
             else:
-                self.state.target_phase_id = self._get_next_phase_id(self.state.current_phase_id)
+                self.state.target_phase_id = self._get_next_phase_id(self.state.current_phase_id, lane_counts)
         
         elif self.state.is_yellow_mode:
             # Track time in yellow
@@ -346,7 +347,7 @@ class SignalController:
                 # Transition to next phase using predefined target
                 next_phase_id = getattr(self.state, "target_phase_id", None)
                 if next_phase_id is None:
-                    next_phase_id = self._get_next_phase_id(self.state.current_phase_id)
+                    next_phase_id = self._get_next_phase_id(self.state.current_phase_id, lane_counts)
                 self.state.reset_phase(next_phase_id, frame_id, self.phases)
                 phase_def = self.phases[self.state.current_phase_id]
                 self.state.phase_green_duration = self._compute_adaptive_green_time(phase_def, lane_counts)
@@ -354,7 +355,9 @@ class SignalController:
         # ── Build output ────────────────────────────────────────
         phase_def = self.phases[self.state.current_phase_id]
         output = self._build_phase_output(
-            phase_def, lane_counts, collisions, frame_id, override_reason=getattr(self.state, "current_override", None)
+            phase_def, lane_counts, collisions, frame_id,
+            override_reason=getattr(self.state, "current_override", None),
+            emergency_lanes=emergency_lane
         )
         
         if self.config.get("debug_mode", False):
@@ -396,7 +399,8 @@ class SignalController:
             phase_def, lane_counts, [], frame_id,
             override_reason="emergency_preemption",
             confidence=1.0,
-            green_override=emergency_duration
+            green_override=emergency_duration,
+            emergency_lanes=emergency_lane
         )
         return output
     
@@ -467,14 +471,13 @@ class SignalController:
 
 
 
-    def _get_next_phase_id(self, current_phase_id: int) -> int:
+    def _get_next_phase_id(self, current_phase_id: int, lane_counts: Dict[str, int] = None) -> int:
         """
-        Get the ID of the next phase in rotation.
+        Get the ID of the next phase.
         
-        Anti-starvation guard (Priority 3):
-          If any lane has been skipped for ≥ max_wait_cycles consecutive cycles,
-          its phase is promoted to run next regardless of density turn order.
-          The wait counter resets each time a lane gets a green phase.
+        Prioritizes the phase with the highest active vehicle density (count),
+        with an anti-starvation safety guard promoting lanes skipped too long,
+        falling back to default sequential rotation if densities are equal/zero.
         """
         try:
             current_idx  = self.phase_order.index(current_phase_id)
@@ -482,29 +485,43 @@ class SignalController:
         except (ValueError, IndexError):
             return 0
 
-        if not self.config.get("enable_anti_starvation", True):
-            return default_next
+        # 1. Anti-starvation guard (Priority 3 promotion)
+        if self.config.get("enable_anti_starvation", True):
+            max_wait = self.config.get("max_wait_cycles", 3)
+            best_starved_phase = None
+            best_wait          = 0
 
-        max_wait = self.config.get("max_wait_cycles", 3)
+            for phase_id, phase_def in self.phases.items():
+                if phase_id == current_phase_id:
+                    continue
+                for lane in phase_def.get("lanes", []):
+                    wait = self.state.wait_cycle_count.get(lane, 0)
+                    if wait >= max_wait and wait > best_wait:
+                        best_wait          = wait
+                        best_starved_phase = phase_id
 
-        # Find the phase whose lanes have been waiting longest
-        best_starved_phase = None
-        best_wait          = 0
+            if best_starved_phase is not None:
+                return best_starved_phase  # Starvation promotion takes absolute priority
 
-        for phase_id, phase_def in self.phases.items():
-            if phase_id == current_phase_id:
-                continue
-            for lane in phase_def.get("lanes", []):
-                wait = self.state.wait_cycle_count.get(lane, 0)
-                if wait >= max_wait and wait > best_wait:
-                    best_wait          = wait
-                    best_starved_phase = phase_id
+        # 2. Density-proportional prioritization (Highest vehicle count first)
+        if lane_counts:
+            best_density_phase = None
+            max_density = -1
+            
+            # Check all candidate phases other than current
+            for phase_id, phase_def in self.phases.items():
+                if phase_id == current_phase_id:
+                    continue
+                density = sum(lane_counts.get(lane, 0) for lane in phase_def.get("lanes", []))
+                # Only switch if there is active traffic/demand on the candidate phase
+                if density > max_density and density > 0:
+                    max_density = density
+                    best_density_phase = phase_id
+            
+            if best_density_phase is not None:
+                return best_density_phase
 
-        # Wait counters are now updated in reset_phase() when an actual transition occurs
-
-        if best_starved_phase is not None:
-            return best_starved_phase  # Anti-starvation promotion
-
+        # 3. Fallback to standard sequential rotation
         return default_next
     
     def _build_phase_output(
@@ -516,12 +533,26 @@ class SignalController:
         override_reason: Optional[str] = None,
         confidence: float = 0.8,
         green_override: Optional[int] = None,
+        emergency_lanes: Optional[List[str]] = None,
     ) -> SignalPhaseOutput:
         """
         Build complete output object for current phase.
         """
         phase_id = phase_def.get("id", 0)
         phase_name = phase_def.get("name", "Unknown Phase")
+        
+        # Check active crash override
+        collision_active = False
+        if self.config.get("enable_collision_override", True):
+            if len(self.state.collision_cooldown) > 0:
+                collision_active = True
+                
+        if collision_active:
+            phase_name = "🚨 ALL-RED INTERSECTION HOLD"
+        elif override_reason == "emergency_preemption" and emergency_lanes:
+            active_road_name = emergency_lanes[0].replace("_road", "").upper()
+            phase_name = f"🚨 EMERGENCY: {active_road_name} ONLY"
+            
         phase_lanes = phase_def.get("lanes", [])
         
         # Use override if provided (e.g., emergency), else compute
@@ -532,20 +563,23 @@ class SignalController:
         red_lanes = []
         yellow_lanes = []
         
-        # ── Collision red override ───────────────────────────────
-        collision_red_lanes = set()
-        if self.config.get("enable_collision_override", True):
-            for lane in self.state.collision_cooldown.keys():
-                collision_red_lanes.add(lane)
-        
-        # ── Apply collision override: force red on affected lanes ─
+        # ── Apply overrides and phase logic ──────────────────────
         all_lanes = ["top_road", "bottom_road", "left_road", "right_road"]
         for lane_name in all_lanes:
-            if lane_name in collision_red_lanes:
-                # Collision → force RED (don't care about phase)
+            if collision_active:
+                # Active crash anywhere -> force ALL signals to RED!
                 red_lanes.append(lane_name)
+            elif override_reason == "emergency_preemption" and emergency_lanes:
+                # Absolute emergency preemption: ONLY the lane(s) with emergency vehicles get GREEN/YELLOW!
+                if lane_name in emergency_lanes:
+                    if self.state.is_yellow_mode:
+                        yellow_lanes.append(lane_name)
+                    else:
+                        active_lanes.append(lane_name)
+                else:
+                    red_lanes.append(lane_name)
             elif lane_name in phase_lanes:
-                # This phase's lane
+                # This phase's lane under standard conditions
                 if self.state.is_yellow_mode:
                     yellow_lanes.append(lane_name)
                 else:
@@ -557,7 +591,7 @@ class SignalController:
         # Time remaining in current green phase
         time_until_next = max(0.0, green_duration - self.state.elapsed_in_phase)
         
-        next_phase_id = self._get_next_phase_id(phase_id)
+        next_phase_id = self._get_next_phase_id(phase_id, lane_counts)
         
         # ── Build metadata for debug ────────────────────────────
         metadata = {
@@ -571,7 +605,7 @@ class SignalController:
         
         # Set override reason if not already set
         if not override_reason:
-            if collision_red_lanes:
+            if collision_active:
                 override_reason = "collision_red_override"
                 confidence = 0.95
             else:

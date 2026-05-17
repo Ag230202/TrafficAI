@@ -43,18 +43,17 @@ from datetime import datetime
 COLLISION_CONFIG = {
     # Minimum bounding box overlap (Intersection over Union) to consider
     # two vehicles as physically occupying the same space.
-    # Increased to 0.55 to prevent false positives from vehicles passing each other in opposite directions.
-    "iou_threshold": 0.55,
+    # Lowered to 0.02 to reliably catch minor contacts and corner collisions.
+    "iou_threshold": 0.02,
 
     # Minimum closing speed in pixels/frame for both vehicles combined.
     # Filters out stationary neighbours and slow lane-merges.
-    # Dropped to 5.0 to catch slow-speed crashes.
-    "min_closing_speed": 15.0,
+    # Set to 2.0 to catch slow-speed and deceleration phase crashes.
+    "min_closing_speed": 2.0,
 
     # Frames to suppress re-flagging the same vehicle pair after a collision.
-    # At frame_skip=3 this is roughly: cooldown * 3 / 30 seconds.
-    # Default 10 → suppresses for ~1 second of real video.
-    "collision_cooldown_frames": 10,
+    # Set to 99999 to ensure each unique pair is logged exactly once (100% unique events).
+    "collision_cooldown_frames": 99999,
 
     # Minimum bounding box area in pixels to consider as a valid vehicle.
     # Filters out small debris resulting from collisions.
@@ -217,9 +216,11 @@ class CollisionDetector:
                 if iou < iou_thresh:
                     continue
 
-                # ── Condition 2: vehicles were closing toward each other ──
+                # ── Condition 2: vehicles were closing toward each other or stationary (static test / post-impact) ──
                 speed = _closing_speed(v_a, v_b)
-                if speed < min_speed:
+                # If they are actively separating (speed < -2.0), ignore.
+                # If they are closing or stationary and overlapping, flag as collision.
+                if speed < -2.0:
                     continue
 
                 # ── Collision confirmed ──────────────────────────

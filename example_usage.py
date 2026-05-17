@@ -136,7 +136,7 @@ CUSTOM_SIGNAL_CONFIG = {
     "use_dqn":                  False,    # Enable DQN
     
     # Collision handling
-    "collision_red_timeout":    5,       # Frames to keep red after crash
+    "collision_red_timeout":    1800,    # Keep red for 1800 frames after crash
     "enable_collision_override": True,   # Force red on collision lanes
     
     # Debug
@@ -429,7 +429,7 @@ def main():
             lane  = crash_report["lane"]
             print(f"  Frame {fid:>5} | [CRASH {sev}] score={score} "
                   f"lane={lane} signals={crash_report['signals']}")
-            alert_dispatcher.dispatch(crash_report, frame_output.get("raw_frame"))
+            alert_dispatcher.dispatch(crash_report, frame_output.get("debug_frame"))
 
         # ── Phase 2: Signal Control ───────────────────────────────────────
         # Only pass a collision to signal_controller when crash_detector
@@ -473,9 +473,7 @@ def main():
         emerg_lane = frame_output["emergency_lane"]
         emerg_ids  = frame_output.get("emergency_veh_ids", set())
 
-        if emerg_lane:
-            print(f"  ⚠  Frame {fid:>5} | EMERGENCY → {emerg_lane} "
-                  f"| vehicle IDs {sorted(emerg_ids)}")
+        # (Redundant emergency print removed — cleanly logged via SignalLogger below)
 
 
         # ── Collision logging ────────────────────────────────────

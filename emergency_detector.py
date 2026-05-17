@@ -36,38 +36,26 @@ import numpy as np
 # ─────────────────────────────────────────────
 EMERGENCY_LIGHT_CONFIG = {
     # Minimum blob area in pixels to be considered a vehicle light source
-    # (not a small traffic light or reflection)
-    # FIX: raised from 400 → 800
-    "min_blob_area": 2000,
+    "min_blob_area": 1000,
 
     # Maximum blob area — very large blobs are likely ROI artefacts
     "max_blob_area": 80000,
 
     # HSV colour ranges for emergency light colours
     # OpenCV HSV: H=0-179, S=0-255, V=0-255
-    #
-    # FIX: S minimum raised 150 → 180, V minimum raised 150 → 200.
-    # Rationale: genuine emergency strobes are extremely saturated and
-    # bright. CLAHE contrast enhancement (used in preprocessing) pushes
-    # ordinary brake lights and traffic signals into the old S≥150/V≥150
-    # bands, causing false positives on every frame. S≥180/V≥200 targets
-    # only the intense, near-white-hot flashes of actual emergency lights.
+    # Adjusted S/V limits to 150 to capture daytime paint markings on static ambulances.
     "color_ranges": {
         # Red — fire trucks, ambulances, police (red wraps around hue)
-        "red_low":  {"lower": (0,   220, 220), "upper": (10,  255, 255)},
-        "red_high": {"lower": (165, 220, 220), "upper": (179, 255, 255)},
+        "red_low":  {"lower": (0,   150, 150), "upper": (10,  255, 255)},
+        "red_high": {"lower": (165, 150, 150), "upper": (179, 255, 255)},
         # Blue — police lights
-        "blue":     {"lower": (100, 220, 220), "upper": (130, 255, 255)},
+        "blue":     {"lower": (100, 150, 150), "upper": (130, 255, 255)},
         # Amber/orange — ambulance, roadwork, some fire trucks
-        "amber":    {"lower": (10,  220, 220), "upper": (25,  255, 255)},
+        "amber":    {"lower": (10,  150, 150), "upper": (25,  255, 255)},
     },
 
     # Minimum number of active colour pixels INSIDE a blob's bounding box.
-    # FIX: raised from 150 → 500, and is now actually enforced in detect().
-    # This rejects blobs whose bounding box area passes the size check but
-    # whose interior is mostly dark — e.g. a large vehicle silhouette with
-    # only a few bright pixels on its edge.
-    "min_color_pixels": 1500,
+    "min_color_pixels": 800,
 
     # Whether to draw debug blobs on the debug frame
     "draw_debug": True,
