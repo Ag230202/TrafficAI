@@ -213,7 +213,7 @@ class CrashDetector:
 
         # ── Score each lane ───────────────────────────────────
         crash_report = None
-        all_lanes = set(lane_counts.keys()) | set(self._prev_lane_counts.keys())
+        all_lanes = set(lane_counts.keys()) | set(self._prev_lane_counts.keys()) | {"intersection_center", "unknown"}
 
         for lane in all_lanes:
             score = 0

@@ -41,8 +41,9 @@ import numpy as np
 LANE_CONFIG = {
     "left_road": [(465, 222), (730, 720), (0, 720), (0, 300)], # Expanded rightwards to safely capture centroids of rightmost lane vehicles
     "top_road": [(455, 198), (685, 144), (509, 53), (414, 67)],
-    "right_road": [(782, 156), (975, 275), (1020, 125), (1025, 81)], # Tightly narrowed to completely exclude sidewalk, trees, and lampposts
-    "bottom_road": [(1056, 359), (650, 720), (1280, 720), (1280, 450)] # Expanded bottom-right/right boundary upwards to cover half-seen vehicles early
+    "right_road": [(1041, 319), (1074, 196), (1081, 142), (1003, 95), (918, 128), (788, 155), (903, 230), (1036, 313)],
+    "bottom_road": [(1056, 359), (650, 720), (1280, 720), (1280, 450)], # Expanded bottom-right/right boundary upwards to cover half-seen vehicles early
+    "intersection_center": [(753, 154), (1051, 351), (705, 647), (479, 221)] # Center zone where all lanes meet — used for collision monitoring only
 }
 
 # Optional global shift if camera moved
@@ -107,7 +108,8 @@ class LaneMapper:
         return None
 
     def count_vehicles_per_lane(self, vehicle_list: list) -> dict:
-        counts = {lane: 0 for lane in self.lanes}
+        # Exclude intersection_center from standard lane counts so it does not affect traffic signal control
+        counts = {lane: 0 for lane in self.lanes if lane != "intersection_center"}
         for vehicle in vehicle_list:
             bbox = vehicle.get("bbox")
             if bbox and self._bbox_area(bbox) < MIN_LANE_VEHICLE_AREA:

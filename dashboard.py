@@ -272,7 +272,29 @@ _init_state()
 #  PIPELINE THREAD — runs the actual AI pipeline in background
 # ─────────────────────────────────────────────────────────────────────────────
 def pipeline_thread(source_path: str, config: dict):
-    print(f"\n[INFO] Starting AI Pipeline Thread...")
+    print("=" * 55)
+    print("  TRAFFIC ANALYSIS PIPELINE")
+    print("=" * 55)
+    print(f"  Source : {source_path}\n")
+
+    # Local accumulators for exact summary matching
+    total_frames = 0
+    total_vehicles = 0
+    emergency_frames = []
+    total_emergency_detections = 0
+    max_emergency_per_frame = 0
+    emergency_vehicle_ids = set()
+    emergency_lane_counts = {}
+    lane_totals = {}
+    direction_counts = {}
+    seen_vehicle_ids = set()
+    seen_in_lane = {}
+    seen_in_direction = {}
+
+    collision_logger = None
+    signal_logger = None
+    data_logger = None
+
     try:
         from pipeline import run_pipeline, build_frame_output
         from preprocessing import CONFIG as DEFAULT_PREPROCESS_CONFIG
@@ -280,10 +302,14 @@ def pipeline_thread(source_path: str, config: dict):
         from tracker import TRACKER_CONFIG, CentroidTracker
         from lane_mapper import LANE_CONFIG, LaneMapper
         from emergency_detector import EmergencyLightDetector
-        from collision_detector import CollisionDetector
+        from collision_detector import CollisionDetector, CollisionLogger
+        from signal_logger import SignalLogger
+        from data_logger import DataLogger
         from crash_detector import CrashDetector
         from alert_dispatcher import AlertDispatcher
         from signal_controller import SignalController, SIGNAL_CONFIG
+
+        print("[Pipeline] Initialising modules...")
 
         preprocess_cfg = {
             **DEFAULT_PREPROCESS_CONFIG,
@@ -319,6 +345,12 @@ def pipeline_thread(source_path: str, config: dict):
         alert_disp  = AlertDispatcher()
         sig_ctrl    = SignalController(SIGNAL_CONFIG)
 
+        collision_logger = CollisionLogger(log_file="collision_log.txt")
+        signal_logger     = SignalLogger(log_file="signal_log.txt")
+        data_logger       = DataLogger()
+
+        print("[Pipeline] All modules ready. Starting frame processing...\n")
+
         from preprocessing import apply_clahe, convert_bgr_to_rgb, reduce_noise, adjust_brightness_contrast
 
         def frames_from_folder(folder_path):
@@ -353,6 +385,66 @@ def pipeline_thread(source_path: str, config: dict):
                 is_new_crash = alert_disp.dispatch(crash_report, frame_out.get("debug_frame"))
 
             signal_out = sig_ctrl.update(frame_out["lane_counts"], frame_out["emergency_lane"], [], idx)
+
+            # Log frame to logging systems
+            if signal_out:
+                signal_logger.log(idx, signal_out)
+            collision_logger.log(frame_out.get("collisions", []))
+            data_logger.log(frame_out, signal_out)
+
+            # --- Print frame-level logging ---
+            # 1. Crash print matching example_usage.py
+            if crash_report:
+                sev   = crash_report["severity"].upper()
+                score = crash_report["score"]
+                lane  = crash_report["lane"]
+                print(f"  Frame {idx:>5} | [CRASH {sev}] score={score} "
+                      f"lane={lane} signals={crash_report['signals']}")
+
+            # 2. Emergency print matching example_usage.py
+            emerg_lane = frame_out.get("emergency_lane", [])
+            emerg_ids  = frame_out.get("emergency_veh_ids", set())
+            if emerg_lane:
+                print(f"  ⚠  Frame {idx:>5} | EMERGENCY → {emerg_lane} "
+                      f"| vehicle IDs {sorted(emerg_ids)}")
+
+            # --- Update local accumulators for the summary ---
+            total_frames += 1
+            for v in frame_out["vehicles"]:
+                vid = v.get("id")
+                if vid is None:
+                    continue
+
+                # Unique global count
+                if vid not in seen_vehicle_ids:
+                    seen_vehicle_ids.add(vid)
+                    total_vehicles += 1
+
+                # Unique direction count
+                d = v.get("direction") or "unknown"
+                if d not in seen_in_direction:
+                    seen_in_direction[d] = set()
+                if vid not in seen_in_direction[d]:
+                    seen_in_direction[d].add(vid)
+                    direction_counts[d] = direction_counts.get(d, 0) + 1
+
+                # Unique lane count
+                lane = v.get("lane") or "unknown"
+                if lane not in seen_in_lane:
+                    seen_in_lane[lane] = set()
+                if vid not in seen_in_lane[lane]:
+                    seen_in_lane[lane].add(vid)
+                    lane_totals[lane] = lane_totals.get(lane, 0) + 1
+
+            if emerg_lane:
+                if idx not in emergency_frames:
+                    emergency_frames.append(idx)
+                total_emergency_detections += len(emerg_lane)
+                for lane in emerg_lane:
+                    emergency_lane_counts[lane] = emergency_lane_counts.get(lane, 0) + 1
+                max_emergency_per_frame = max(max_emergency_per_frame, len(emerg_lane))
+                for vid in emerg_ids:
+                    emergency_vehicle_ids.add(vid)
 
             # Update State
             st.session_state.frame_rgb = frame_out.get("debug_frame").copy()
@@ -410,6 +502,59 @@ def pipeline_thread(source_path: str, config: dict):
         traceback.print_exc()
     finally:
         st.session_state.running = False
+        
+        # --- Print end-of-run summary matching example_usage.py ---
+        print("\n" + "═" * 55)
+        print("  PIPELINE SUMMARY (Phase 1: Traffic Analysis)")
+        print("═" * 55)
+        print(f"  Frames processed        : {total_frames}")
+        print(f"  Total vehicle obs       : {total_vehicles}")
+        print()
+
+        print(f"  Emergency events")
+        print(f"  ├─ Frames with emergency : {len(emergency_frames)}")
+        if emergency_frames:
+            print(f"  ├─ Frame IDs             : {emergency_frames}")
+        print(f"  ├─ Total detections      : {total_emergency_detections}")
+        print(f"  ├─ Peak lanes at once    : {max_emergency_per_frame}")
+        id_str = f"  {sorted(emergency_vehicle_ids)}" if emergency_vehicle_ids else "  none"
+        print(f"  └─ Emergency vehicle IDs : {len(emergency_vehicle_ids)}{id_str}")
+        if emergency_lane_counts:
+            print()
+            print("  Emergency lane breakdown:")
+            for lane, count in sorted(emergency_lane_counts.items(), key=lambda x: -x[1]):
+                bar = "█" * min(count, 30)
+                print(f"    {lane:<12} {count:>4} frames  {bar}")
+        print()
+
+        print("  Cumulative lane counts:")
+        for lane, count in sorted(lane_totals.items()):
+            bar = "█" * min(count, 40)
+            print(f"    {lane:<10} {count:>5}  {bar}")
+        print()
+
+        print("  Vehicle directions:")
+        for direction, count in sorted(direction_counts.items(), key=lambda x: -x[1]):
+            print(f"    {direction:<12} {count}")
+        print("═" * 55)
+
+        if collision_logger is not None:
+            collision_logger.print_summary()
+
+        if signal_logger is not None:
+            signal_logger.print_summary()
+            signal_logger.export_json("signal_stats.json")
+
+        if data_logger is not None:
+            data_logger.close()
+
+        print("\n[Complete] All summaries printed.")
+        print("  • collision_log.txt   — per-collision events")
+        print("  • signal_log.txt      — per-frame signal state")
+        print("  • signal_stats.json   — signal summary statistics")
+        print("  • traffic_log.csv     — Phase 3 DQN training data")
+        print("  • alerts_log.csv      — confirmed crash alerts")
+        print("  • alerts/             — crash snapshot images")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  SIDEBAR

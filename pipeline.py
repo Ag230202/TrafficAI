@@ -77,12 +77,12 @@ def build_frame_output(
     # Draws red overlap rectangles on debug_frame directly.
     collisions = collision_detector.detect(vehicles, frame_index, debug_frame)
 
-    # ── Draw lane polygons ───────────────────────────────────────
     colors = {
         "left_road": (0, 0, 255),    # Blue in RGB
         "bottom_road": (0, 255, 0),  # Green in RGB
         "right_road": (255, 0, 0),   # Red in RGB
-        "top_road": (255, 255, 0)    # Yellow in RGB
+        "top_road": (255, 255, 0),   # Yellow in RGB
+        "intersection_center": (255, 0, 255) # Magenta in RGB
     }
     
     for lane_name, polygon in lane_mapper.get_lane_boundaries().items():

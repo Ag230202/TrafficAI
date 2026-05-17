@@ -75,17 +75,13 @@ PREPROCESS_CONFIG = {
     # areas simultaneously. Set to None (Adaptive) by default.
     "use_clahe":        None,
     "clahe_clip_limit": 2.0,             # Higher = more contrast, more noise risk
-    "clahe_tile_grid":  (16, 16),          # Tile size for 1280x720 frames
+    "clahe_tile_grid":  (8, 8),          # Tile size for 1280x720 frames
 
     "use_background_subtraction": False, # Toggle MOG2 background subtraction
 }
 
-CUSTOM_LANE_CONFIG = {
-    "left_road": [(465, 222), (730, 720), (0, 720), (0, 300)], # Expanded rightwards to safely capture centroids of rightmost lane vehicles
-    "top_road": [(455, 198), (685, 144), (509, 53), (414, 67)],
-    "right_road": [(782, 156), (975, 275), (1020, 125), (1025, 81)], # Tightly narrowed to completely exclude sidewalk, trees, and lampposts
-    "bottom_road": [(1056, 359), (650, 720), (1280, 720), (1280, 450)] # Expanded bottom-right/right boundary upwards to cover half-seen vehicles early
-}
+# Automatically inherit the verified coordinates from lane_mapper to guarantee 100% synchronization
+CUSTOM_LANE_CONFIG = LANE_CONFIG.copy()
 
 # ─ Optional Global Shift ─────────────────────────────────────────
 # Change these if the camera has moved slightly and you need to 
@@ -108,15 +104,15 @@ CUSTOM_DETECTOR_CONFIG = {
     # At 640, vehicles in the upper half of the frame are ~20-40px wide
     # and fall between YOLO grid cells. 1280 doubles grid density, allowing
     # detection of vehicles half the size. ~2x slower but essential here.
-    "imgsz": 1280,
+    "imgsz": 640,
 }
 
 # ─ Tracker overrides ─────────────────────────────────────────────
 CUSTOM_TRACKER_CONFIG = {
     **TRACKER_CONFIG,
     "max_distance":    100,              # Max pixels to match same vehicle
-    "max_lost_frames": 8,                # Frames before track is dropped
-    "min_hits":        2,                # Min frames to confirm a vehicle (prevents noise)
+    "max_lost_frames": 15,               # Frames before track is dropped
+    "min_hits":        1,                # Min frames to confirm a vehicle (prevents noise)
 }
 
 # ─ Signal controller overrides (Phase 2) ────────────────────────
@@ -194,7 +190,7 @@ class PipelineSummary:
                 self.total_vehicles += 1
 
             # Unique direction count
-            d = v.get("direction", "unknown")
+            d = v.get("direction") or "unknown"
             if d not in self.seen_in_direction:
                 self.seen_in_direction[d] = set()
             if vid not in self.seen_in_direction[d]:
@@ -202,7 +198,7 @@ class PipelineSummary:
                 self.direction_counts[d] = self.direction_counts.get(d, 0) + 1
 
             # Unique lane count
-            lane = v.get("lane", "unknown")
+            lane = v.get("lane") or "unknown"
             if lane not in self.seen_in_lane:
                 self.seen_in_lane[lane] = set()
             if vid not in self.seen_in_lane[lane]:
