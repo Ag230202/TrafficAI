@@ -1,17 +1,10 @@
 import cv2
 import numpy as np
+from lane_mapper import LANE_CONFIG
 
 # ---- IMAGE PATH ----
 # Using the footage where you just picked the coordinates
 img = cv2.imread(r"D:\Traffic_AI\aa\frame_000001.png")
-
-# ---- FINAL MANUAL COORDINATES ----
-LANE_CONFIG = {
-    "left_road": [(437, 222), (621, 698), (0, 720), (0, 416)],
-    "top_road": [(455, 198), (685, 144), (509, 53), (414, 67)],
-    "right_road": [(782, 156), (1033, 317), (1078, 139), (1009, 81)],
-    "bottom_road": [(1056, 359), (650, 708), (1209, 706), (1277, 636)]
-}
 
 # ---- COLORS ----
 colors = {

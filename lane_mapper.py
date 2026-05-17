@@ -39,10 +39,10 @@ import numpy as np
 
 # Coordinates are for resized frame 1280x720
 LANE_CONFIG = {
-    "left_road": [(437, 222), (650, 720), (0, 720), (0, 400)], # Expanded for bottom-left edge
+    "left_road": [(465, 222), (730, 720), (0, 720), (0, 300)], # Expanded rightwards to safely capture centroids of rightmost lane vehicles
     "top_road": [(455, 198), (685, 144), (509, 53), (414, 67)],
-    "right_road": [(782, 156), (1033, 317), (1078, 139), (1009, 81)],
-    "bottom_road": [(1056, 359), (650, 720), (1280, 720), (1280, 600)] # Expanded for bottom-right edge
+    "right_road": [(782, 156), (975, 275), (1020, 125), (1025, 81)], # Tightly narrowed to completely exclude sidewalk, trees, and lampposts
+    "bottom_road": [(1056, 359), (650, 720), (1280, 720), (1280, 450)] # Expanded bottom-right/right boundary upwards to cover half-seen vehicles early
 }
 
 # Optional global shift if camera moved
@@ -90,7 +90,7 @@ class LaneMapper:
         # for points outside (closer to 0 = closer to the edge)
         best_lane = None
         best_dist = float("inf")
-        MAX_FALLBACK_DIST = 350  # pixels — don't assign if too far
+        MAX_FALLBACK_DIST = 10  # Tightened threshold to reject sidewalk false positives
 
         for lane_name, polygon in self.lanes.items():
             poly_np = np.array(polygon, dtype=np.int32)

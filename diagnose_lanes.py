@@ -8,18 +8,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from detector import VehicleDetector, DETECTOR_CONFIG
-from lane_mapper import LaneMapper, MIN_LANE_VEHICLE_AREA
+from lane_mapper import LaneMapper, MIN_LANE_VEHICLE_AREA, LANE_CONFIG
 from preprocessing import apply_clahe, reduce_noise, convert_bgr_to_rgb
 
 FRAME_PATH = r"D:\Traffic_AI\aa\frame_000001.png"
 RESIZE_W, RESIZE_H = 1280, 720
-
-LANE_CONFIG = {
-    "left_road": [(437, 222), (621, 698), (0, 720), (0, 416)],
-    "top_road": [(455, 198), (685, 144), (509, 53), (414, 67)],
-    "right_road": [(782, 156), (1033, 317), (1078, 139), (1009, 81)],
-    "bottom_road": [(1056, 359), (650, 708), (1209, 706), (1277, 636)]
-}
 
 def calculate_iou(box1, box2):
     x1_1, y1_1, x2_1, y2_1 = box1

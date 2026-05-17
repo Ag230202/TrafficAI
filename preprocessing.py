@@ -271,26 +271,38 @@ def apply_road_mask(frame):
     cv2.fillPoly(mask, [pts], 255)
     return cv2.bitwise_and(frame, frame, mask=mask)
 
-def preprocess_for_yolo(frame_bgr):
+def preprocess_for_yolo(frame_bgr, force_clahe=None):
     """
-    Shadow-Vision (Gamma Correction) + Subtle Contrast.
+    Adaptive Preprocessing for YOLO:
+    Applies Shadow-Vision (Gamma + Subtle CLAHE) if force_clahe is True,
+    or if force_clahe is None and the frame is dark (night-time / low-light).
+    Otherwise, returns the clean RGB frame (best for daytime to prevent overexposure/blurring).
     """
-    # 1. Gamma Correction (Brightens shadows where cars are missed)
-    gamma = 1.5
-    invGamma = 1.0 / gamma
-    table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
-    processed = cv2.LUT(frame_bgr, table)
-
-    # 2. Subtle CLAHE
-    lab = cv2.cvtColor(processed, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=1.2, tileGridSize=(8,8))
-    cl = clahe.apply(l)
-    limg = cv2.merge((cl,a,b))
-    processed = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+    # Fast check for night-time using mean brightness of grayscale frame
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    mean_brightness = np.mean(gray)
     
-    # 3. Final conversion to RGB
-    return cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
+    # Threshold 75.0 distinguishes bright daytime vs low-light/night footage
+    should_apply_clahe = force_clahe if force_clahe is not None else (mean_brightness < 75.0)
+    
+    if should_apply_clahe:
+        # 1. Gamma Correction (Brightens shadows where cars are missed)
+        gamma = 1.5
+        invGamma = 1.0 / gamma
+        table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+        processed = cv2.LUT(frame_bgr, table)
+
+        # 2. Subtle CLAHE
+        lab = cv2.cvtColor(processed, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=1.2, tileGridSize=(8,8))
+        cl = clahe.apply(l)
+        limg = cv2.merge((cl,a,b))
+        processed = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+        return cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
+    else:
+        # Daytime: just clean conversion to RGB to preserve fine edge details
+        return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
 
 # ─────────────────────────────────────────────

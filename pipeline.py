@@ -185,7 +185,7 @@ def run_pipeline(
 
     from preprocessing import preprocess_for_yolo
 
-    use_clahe = cfg.get("use_clahe", False)
+    use_clahe = cfg.get("use_clahe", None)
 
     for frame_index, filename in enumerate(filenames):
         if frame_index % frame_skip != 0:
@@ -197,7 +197,7 @@ def run_pipeline(
             continue
 
         frame_bgr = cv2.resize(frame_bgr, (resize_w, resize_h))
-        frame_rgb = preprocess_for_yolo(frame_bgr)
+        frame_rgb = preprocess_for_yolo(frame_bgr, force_clahe=use_clahe)
 
         # 1. Detect & Track with ByteTrack
         active_tracks = detector.detect(frame_rgb, frame_index)

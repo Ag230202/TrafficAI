@@ -72,20 +72,19 @@ PREPROCESS_CONFIG = {
     # FIX 1: CLAHE enabled for night-time / mixed lighting footage.
     # Unlike alpha/beta (global transform), CLAHE equalises contrast
     # locally per tile — handles blown-out emergency lights AND dark road
-    # areas simultaneously. Set to False for daytime footage.
-    "use_clahe":        True,
+    # areas simultaneously. Set to None (Adaptive) by default.
+    "use_clahe":        None,
     "clahe_clip_limit": 2.0,             # Higher = more contrast, more noise risk
     "clahe_tile_grid":  (16, 16),          # Tile size for 1280x720 frames
 
     "use_background_subtraction": False, # Toggle MOG2 background subtraction
 }
 
-# ─ Lane boundaries ───────────────────────────────────────────────
 CUSTOM_LANE_CONFIG = {
-    "left_road": [(8,399),(397,256),(492,720),(0,720)],
-    "bottom_road": [(1083,411),(1269,635),(1277,714),(801,717)],
-    "right_road": [(1005,81),(1100,134),(1100,400),(1028,304),(784,164)],
-    "top_road": [(405,51),(466,40),(723,159),(455,209)]
+    "left_road": [(465, 222), (730, 720), (0, 720), (0, 300)], # Expanded rightwards to safely capture centroids of rightmost lane vehicles
+    "top_road": [(455, 198), (685, 144), (509, 53), (414, 67)],
+    "right_road": [(782, 156), (975, 275), (1020, 125), (1025, 81)], # Tightly narrowed to completely exclude sidewalk, trees, and lampposts
+    "bottom_road": [(1056, 359), (650, 720), (1280, 720), (1280, 450)] # Expanded bottom-right/right boundary upwards to cover half-seen vehicles early
 }
 
 # ─ Optional Global Shift ─────────────────────────────────────────

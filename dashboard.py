@@ -336,7 +336,7 @@ def pipeline_thread(source_path: str, config: dict):
         for idx, frame_bgr in frames_from_folder(source_path):
             # --- Professional Vision Pipeline ---
             from preprocessing import preprocess_for_yolo
-            frame_rgb = preprocess_for_yolo(frame_bgr)
+            frame_rgb = preprocess_for_yolo(frame_bgr, force_clahe=preprocess_cfg.get("use_clahe"))
             # ------------------------------------
 
             active_tracks = detector.detect(frame_rgb, idx)
@@ -434,7 +434,20 @@ with st.sidebar:
     st.markdown("### Detection")
     conf_thresh = 0.10 # Lowered to catch low-confidence silver cars
     frame_skip = st.number_input("Frame skip", 1, 30, 3)
-    use_clahe = st.checkbox("CLAHE", value=True)
+    
+    vision_mode = st.selectbox(
+        "Vision Mode",
+        ["Adaptive (Auto)", "Daytime (Clean RGB)", "Night Mode (CLAHE)"],
+        index=0,
+        help="Adaptive mode auto-detects lighting and applies CLAHE only when dark."
+    )
+    
+    # Map selection to force_clahe parameter
+    force_clahe = None
+    if vision_mode == "Daytime (Clean RGB)":
+        force_clahe = False
+    elif vision_mode == "Night Mode (CLAHE)":
+        force_clahe = True
 
     st.markdown("<br>", unsafe_allow_html=True)
     col1, col2 = st.columns(2)
@@ -449,7 +462,7 @@ with st.sidebar:
         _init_state()
         st.session_state.running = True
         st.session_state.stop_flag = False
-        t = threading.Thread(target=pipeline_thread, args=(source_path, {"conf_thresh": conf_thresh, "frame_skip": frame_skip, "use_clahe": use_clahe}), daemon=True)
+        t = threading.Thread(target=pipeline_thread, args=(source_path, {"conf_thresh": conf_thresh, "frame_skip": frame_skip, "use_clahe": force_clahe}), daemon=True)
         add_script_run_ctx(t)
         t.start()
         st.rerun()
