@@ -63,29 +63,29 @@ SIGNAL_CONFIG = {
     "collision_red_timeout":    1800,    # Keep lane red for 1800 frames (3 mins) after collision
     "enable_collision_override": True,   # Hard-stop traffic into collision zone
     
-    # ── Phase definitions (North-South / East-West quad) ────────
+    # ── Phase definitions — ONE lane green at a time ────────────
     "phases": [
         {
             "id": 0,
-            "name": "North-South (Top + Bottom)",
-            "lanes": ["top_road", "bottom_road"],
+            "name": "North (Top Road)",
+            "lanes": ["top_road"],
             "default_green": 20,
         },
         {
             "id": 1,
-            "name": "East (Right)",
+            "name": "East (Right Road)",
             "lanes": ["right_road"],
             "default_green": 15,
         },
         {
             "id": 2,
-            "name": "North-South (Top + Bottom)",
-            "lanes": ["top_road", "bottom_road"],
+            "name": "South (Bottom Road)",
+            "lanes": ["bottom_road"],
             "default_green": 20,
         },
         {
             "id": 3,
-            "name": "West (Left)",
+            "name": "West (Left Road)",
             "lanes": ["left_road"],
             "default_green": 15,
         },
@@ -116,8 +116,7 @@ class SignalControllerState:
     wait_cycle_count: Dict[str, int] = field(default_factory=dict)   # lane -> skipped cycles
     target_phase_id: Optional[int] = None
     current_override: Optional[str] = None
-    target_phase_id: Optional[int] = None
-    current_override: Optional[str] = None
+    last_emergency_approach_lane: Optional[str] = None
     
     def reset_phase(self, phase_id: int, frame_id: int, all_phases: dict):
         """Reset counters when transitioning to a new phase."""
@@ -378,6 +377,11 @@ class SignalController:
         """
         target_lane = emergency_lane[0]  # Prioritize first in list
         
+        if target_lane != "intersection_center":
+            self.state.last_emergency_approach_lane = target_lane
+        elif self.state.last_emergency_approach_lane is not None:
+            target_lane = self.state.last_emergency_approach_lane
+        
         # Find phase that serves this lane
         target_phase_id = None
         for phase_id, phase_def in self.phases.items():
@@ -550,8 +554,11 @@ class SignalController:
         if collision_active:
             phase_name = "🚨 ALL-RED INTERSECTION HOLD"
         elif override_reason == "emergency_preemption" and emergency_lanes:
-            active_road_name = emergency_lanes[0].replace("_road", "").upper()
-            phase_name = f"🚨 EMERGENCY: {active_road_name} ONLY"
+            target_lane = emergency_lanes[0]
+            if target_lane == "intersection_center" and self.state.last_emergency_approach_lane:
+                target_lane = self.state.last_emergency_approach_lane
+            active_road_name = target_lane.replace("_road", "").upper()
+            phase_name = f"🚨 EMERGENCY: {active_road_name} PREEMPTION"
             
         phase_lanes = phase_def.get("lanes", [])
         
@@ -569,9 +576,9 @@ class SignalController:
             if collision_active:
                 # Active crash anywhere -> force ALL signals to RED!
                 red_lanes.append(lane_name)
-            elif override_reason == "emergency_preemption" and emergency_lanes:
-                # Absolute emergency preemption: ONLY the lane(s) with emergency vehicles get GREEN/YELLOW!
-                if lane_name in emergency_lanes:
+            elif override_reason == "emergency_preemption":
+                # Emergency preemption: safely green-light the entire phase that serves the emergency vehicle!
+                if lane_name in phase_lanes:
                     if self.state.is_yellow_mode:
                         yellow_lanes.append(lane_name)
                     else:

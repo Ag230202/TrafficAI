@@ -216,11 +216,11 @@ class CollisionDetector:
                 if iou < iou_thresh:
                     continue
 
-                # ── Condition 2: vehicles were closing toward each other or stationary (static test / post-impact) ──
+                # ── Condition 2: closing velocity check ─────────
                 speed = _closing_speed(v_a, v_b)
-                # If they are actively separating (speed < -2.0), ignore.
-                # If they are closing or stationary and overlapping, flag as collision.
-                if speed < -2.0:
+                # Vehicles must be actively converging at a minimum speed to be a crash.
+                # This filters out stationary vehicles queued in traffic that have overlapping 2D boxes.
+                if speed < min_speed:
                     continue
 
                 # ── Collision confirmed ──────────────────────────
