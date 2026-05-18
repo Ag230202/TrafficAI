@@ -256,6 +256,7 @@ def _init_state(force_reset=False):
             "lane_totals":      {},
             "seen_vehicle_ids": set(),
             "seen_entries":     set(), # Essential for new counting logic
+            "seen_emergency_vehicle_ids": set(),
         },
         "event_log":        deque(maxlen=60),
         "fps_deque":        deque(maxlen=20),
@@ -265,6 +266,9 @@ def _init_state(force_reset=False):
     for k, v in defaults.items():
         if k not in st.session_state or force_reset:
             st.session_state[k] = v
+    if force_reset:
+        st.session_state.pop("id_frame_counts", None)
+        st.session_state.pop("prev_emergency_lanes", None)
 
 _init_state()
 
@@ -458,32 +462,53 @@ def pipeline_thread(source_path: str, config: dict):
 
             # --- High-Accuracy Validation Engine ---
             s = st.session_state.stats
+            s["total_frames"] = total_frames
             
-            if "id_frame_counts" not in st.session_state:
-                st.session_state.id_frame_counts = {}
+            # 1. Unique emergency vehicle tracking
+            if "seen_emergency_vehicle_ids" not in s:
+                s["seen_emergency_vehicle_ids"] = set()
+            for vid in frame_out.get("emergency_veh_ids", set()):
+                if vid is not None and vid != -1:
+                    s["seen_emergency_vehicle_ids"].add(vid)
             
+            # Update emergency count precisely based on unique tracked emergency vehicles,
+            # fallback to 1 if emergency lights are active but vehicle matching is still pending.
+            # We keep this cumulative so it doesn't drop back to 0 at the end of the run.
+            if len(s["seen_emergency_vehicle_ids"]) > 0:
+                s["total_emergency"] = len(s["seen_emergency_vehicle_ids"])
+            elif frame_out.get("emergency_lane"):
+                s["total_emergency"] = max(s.get("total_emergency", 0), 1)
+            
+            # 2. Unique vehicle counting & lane/direction tracking
             for v in frame_out["vehicles"]:
-                vid, lane = v.get("id"), v.get("lane")
+                vid = v.get("id")
+                lane = v.get("lane")
                 if vid is not None and vid != -1 and lane:
-                    st.session_state.id_frame_counts[vid] = st.session_state.id_frame_counts.get(vid, 0) + 1
+                    # Unique vehicle IDs
+                    if vid not in s["seen_vehicle_ids"]:
+                        s["seen_vehicle_ids"].add(vid)
+                        s["total_vehicles"] += 1
                     
-                    # Faster validation (5 frames)
-                    if st.session_state.id_frame_counts[vid] >= 5:
-                        if vid not in s["seen_vehicle_ids"]:
-                            s["seen_vehicle_ids"].add(vid)
-                            s["total_vehicles"] += 1
-                        
-                        lane_key = f"{vid}_{lane}"
-                        if lane_key not in s.get("seen_entries", set()):
-                            if "seen_entries" not in s: s["seen_entries"] = set()
-                            s["seen_entries"].add(lane_key)
-                            s["lane_totals"][lane] = s["lane_totals"].get(lane, 0) + 1
+                    # Cumulative lane totals
+                    lane_key = f"{vid}_{lane}"
+                    if lane_key not in s.get("seen_entries", set()):
+                        if "seen_entries" not in s: s["seen_entries"] = set()
+                        s["seen_entries"].add(lane_key)
+                        s["lane_totals"][lane] = s["lane_totals"].get(lane, 0) + 1
+                    
+                    # Unique directions
+                    d = v.get("direction") or "unknown"
+                    if "seen_in_direction" not in s:
+                        s["seen_in_direction"] = {}
+                    if d not in s["seen_in_direction"]:
+                        s["seen_in_direction"][d] = set()
+                    if vid not in s["seen_in_direction"][d]:
+                        s["seen_in_direction"][d].add(vid)
+                        s["direction_counts"][d] = s["direction_counts"].get(d, 0) + 1
             
+            if is_new_crash: s["total_collisions"] += 1
             st.session_state.stats = s
             # ----------------------------------------
-
-            if is_new_crash: st.session_state.stats["total_collisions"] += 1
-            if frame_out.get("emergency_lane"): st.session_state.stats["total_emergency"] += 1
 
             # Log events (deduplicated to prevent spam)
             ts = datetime.now().strftime("%H:%M:%S")
@@ -607,7 +632,9 @@ with st.sidebar:
             st.session_state.path_history.insert(0, source_path)
             st.session_state.path_history = st.session_state.path_history[:3] # Keep last 3 paths
             
-        _init_state()
+        _init_state(force_reset=True)
+        from pipeline import build_frame_output
+        build_frame_output._track_history = {}
         st.session_state.running = True
         st.session_state.stop_flag = False
         t = threading.Thread(target=pipeline_thread, args=(source_path, {"conf_thresh": conf_thresh, "frame_skip": frame_skip, "use_clahe": force_clahe}), daemon=True)

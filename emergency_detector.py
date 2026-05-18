@@ -46,12 +46,12 @@ EMERGENCY_LIGHT_CONFIG = {
     # Adjusted S/V limits to 150 to capture daytime paint markings on static ambulances.
     "color_ranges": {
         # Red — fire trucks, ambulances, police (red wraps around hue)
-        "red_low":  {"lower": (0,   150, 150), "upper": (10,  255, 255)},
-        "red_high": {"lower": (165, 150, 150), "upper": (179, 255, 255)},
+        "red_low":  {"lower": (0,   200, 200), "upper": (10,  255, 255)},
+        "red_high": {"lower": (165, 200, 200), "upper": (179, 255, 255)},
         # Blue — police lights
-        "blue":     {"lower": (100, 150, 150), "upper": (130, 255, 255)},
+        "blue":     {"lower": (100, 200, 200), "upper": (130, 255, 255)},
         # Amber/orange — ambulance, roadwork, some fire trucks
-        "amber":    {"lower": (10,  150, 150), "upper": (25,  255, 255)},
+        "amber":    {"lower": (10,  200, 200), "upper": (25,  255, 255)},
     },
 
     # Minimum number of active colour pixels INSIDE a blob's bounding box.
@@ -73,18 +73,22 @@ class EmergencyLightDetector:
     def __init__(self, config: dict = None):
         self.cfg = config or EMERGENCY_LIGHT_CONFIG
 
-    def detect(self, frame_bgr: np.ndarray, lane_mapper, debug_frame=None) -> list:
+    def detect(self, frame_bgr: np.ndarray, lane_mapper, debug_frame=None, vehicles=None) -> dict:
         """
-        Detects emergency light blobs in the frame and maps them to lanes.
+        Detects emergency light blobs in the frame and maps them to lanes. Also
+        performs high-precision color density checks within vehicle bounding boxes
+        to identify unique emergency vehicles.
 
         frame_bgr:   BGR np.ndarray (before colour conversion)
         lane_mapper: LaneMapper instance — used to assign blobs to lanes
         debug_frame: optional RGB frame to draw blobs on for visualisation
+        vehicles:    optional list of tracked vehicles to check for internal lights
 
-        Returns: list of lane name strings where emergency lights found
+        Returns: dict with keys "detected_blobs" (list of dicts) and "matched_vehicle_ids" (set)
         """
         hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-        emergency_lanes = []
+        detected_blobs = []
+        matched_vehicle_ids = set()
         cfg = self.cfg
 
         # Build combined mask for all emergency light colours
@@ -110,15 +114,37 @@ class EmergencyLightDetector:
                     np.array(ranges["upper"]))
                 combined_mask = cv2.bitwise_or(combined_mask, mask)
 
-        # Morphological close to join nearby bright pixels into blobs
+        # High-precision color density check within each vehicle bounding box
+        if vehicles:
+            h_img, w_img = combined_mask.shape[:2]
+            for v in vehicles:
+                bbox = v.get("bbox")
+                if bbox:
+                    vx1, vy1, vx2, vy2 = bbox
+                    x1_c = max(0, min(vx1, w_img - 1))
+                    y1_c = max(0, min(vy1, h_img - 1))
+                    x2_c = max(0, min(vx2, w_img - 1))
+                    y2_c = max(0, min(vy2, h_img - 1))
+                    
+                    if x2_c > x1_c and y2_c > y1_c:
+                        crop = combined_mask[y1_c:y2_c, x1_c:x2_c]
+                        color_pixels = cv2.countNonZero(crop)
+                        # Require a dense cluster of active emergency color pixels (at least 500px)
+                        # inside the vehicle bounding box to classify as emergency vehicle.
+                        if color_pixels >= 500:
+                            vid = v.get("id")
+                            if vid is not None and vid != -1:
+                                matched_vehicle_ids.add(vid)
+
+        # Morphological close to join nearby bright pixels into blobs for lane mapping
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
-        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN,
+        closed_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
+        closed_mask = cv2.morphologyEx(closed_mask, cv2.MORPH_OPEN,
                                           cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
 
         # Find contours of bright blobs
         contours, _ = cv2.findContours(
-            combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            closed_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
 
         for cnt in contours:
@@ -129,12 +155,8 @@ class EmergencyLightDetector:
             # Get bounding box and centroid
             x, y, w, h = cv2.boundingRect(cnt)
 
-            # FIX: enforce min_color_pixels — count how many qualifying
-            # colour pixels actually exist inside this blob's bounding box.
-            # The original code defined min_color_pixels in config but
-            # never checked it, so large low-density blobs (brake lights,
-            # sunlit bonnets) passed straight through.
-            color_pixel_count = cv2.countNonZero(combined_mask[y:y + h, x:x + w])
+            # Enforce min_color_pixels
+            color_pixel_count = cv2.countNonZero(closed_mask[y:y + h, x:x + w])
             if color_pixel_count < cfg["min_color_pixels"]:
                 continue
 
@@ -142,8 +164,11 @@ class EmergencyLightDetector:
             bbox = [x, y, x + w, y + h]
             lane = lane_mapper.assign_lane(bbox)
 
-            if lane and lane not in emergency_lanes:
-                emergency_lanes.append(lane)
+            if lane:
+                detected_blobs.append({
+                    "lane": lane,
+                    "bbox": bbox
+                })
 
             # Draw on debug frame if provided
             if debug_frame is not None and cfg.get("draw_debug", True):
@@ -158,4 +183,7 @@ class EmergencyLightDetector:
                     1,
                 )
 
-        return emergency_lanes
+        return {
+            "detected_blobs": detected_blobs,
+            "matched_vehicle_ids": matched_vehicle_ids
+        }
