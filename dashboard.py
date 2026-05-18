@@ -17,7 +17,7 @@ from collections import deque, defaultdict
 from typing import Optional
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 import cv2
 import numpy as np
