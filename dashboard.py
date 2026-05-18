@@ -222,6 +222,15 @@ st.markdown("""
     background: #f8fafc;
   }
 
+  @keyframes pulse-green {
+    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+    50% { transform: scale(1.05); box-shadow: 0 0 10px 4px rgba(34, 197, 94, 0.2); border-color: #22c55e; }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+  }
+  .count-changed {
+    animation: pulse-green 0.4s ease-out;
+  }
+
   /* Sidebar Buttons */
   div[data-testid="stSidebar"] button {
     height: 3.5rem !important;
@@ -262,6 +271,8 @@ def _init_state(force_reset=False):
         "fps_deque":        deque(maxlen=20),
         "current_fps":      0.0,
         "frames_processed": 0,
+        "prev_lane_counts": {},
+        "prev_lane_totals": {},
     }
     for k, v in defaults.items():
         if k not in st.session_state or force_reset:
@@ -649,7 +660,7 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────────────────
 #  UI RENDERING
 # ─────────────────────────────────────────────────────────────────────────────
-@st.fragment(run_every=0.12)
+@st.fragment(run_every=0.03)
 def render_ui():
     status = "🟢 LIVE" if st.session_state.running else "🔴 STOPPED"
     st.markdown(f"""
@@ -737,16 +748,28 @@ def render_ui():
     with c2:
         st.markdown('<p class="section-head">Live Lane Density</p>', unsafe_allow_html=True)
         lc = st.session_state.lane_counts
+        prev_lc = st.session_state.prev_lane_counts
+        
         colors = ["#eab308", "#22c55e", "#2563eb", "#ef4444"]
         cols = st.columns(2)
         for i, l in enumerate(["top_road", "bottom_road", "left_road", "right_road"]):
-            cols[i%2].markdown(f'<div class="lane-stat-card"><div style="color:{colors[i]}; font-size:1.6rem; font-weight:700;">{lc.get(l,0)}</div><div style="font-size:0.6rem; color:#64748b;">{l.replace("_road","").upper()}</div></div>', unsafe_allow_html=True)
+            val = lc.get(l, 0)
+            anim_class = " count-changed" if val != prev_lc.get(l, val) else ""
+            cols[i%2].markdown(f'<div class="lane-stat-card{anim_class}"><div style="color:{colors[i]}; font-size:1.6rem; font-weight:700;">{val}</div><div style="font-size:0.6rem; color:#64748b;">{l.replace("_road","").upper()}</div></div>', unsafe_allow_html=True)
 
         st.markdown('<p class="section-head">Historical Lane Totals</p>', unsafe_allow_html=True)
         lt = st.session_state.stats["lane_totals"]
+        prev_lt = st.session_state.prev_lane_totals
+        
         cols_h = st.columns(2)
         for i, l in enumerate(["top_road", "bottom_road", "left_road", "right_road"]):
-            cols_h[i%2].markdown(f'<div class="lane-stat-card"><div style="color:{colors[i]}; font-size:1.4rem; font-weight:700;">{lt.get(l,0)}</div><div style="font-size:0.55rem; color:#64748b;">{l.replace("_road","").upper()} TOTAL</div></div>', unsafe_allow_html=True)
+            val_total = lt.get(l, 0)
+            anim_class_t = " count-changed" if val_total != prev_lt.get(l, val_total) else ""
+            cols_h[i%2].markdown(f'<div class="lane-stat-card{anim_class_t}"><div style="color:{colors[i]}; font-size:1.4rem; font-weight:700;">{val_total}</div><div style="font-size:0.55rem; color:#64748b;">{l.replace("_road","").upper()} TOTAL</div></div>', unsafe_allow_html=True)
+
+        # Update previous states for next render
+        st.session_state.prev_lane_counts = lc.copy()
+        st.session_state.prev_lane_totals = lt.copy()
 
         st.markdown('<p class="section-head">Dispatch Alerts</p>', unsafe_allow_html=True)
         if st.session_state.frames_processed > 0:
