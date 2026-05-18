@@ -36,15 +36,33 @@ def build_frame_output(
     import cv2
     vehicles = []
 
+    # Initialize or fetch track history to compute centroids across frames
+    if not hasattr(build_frame_output, "_track_history"):
+        build_frame_output._track_history = {}
+    history = build_frame_output._track_history
+
     for track in active_tracks:
         # ByteTrack returns dictionaries
         bbox = track.get("bbox")
         lane = lane_mapper.assign_lane(bbox)
+        track_id = track.get("id")
+
+        # Compute current centroid
+        x1, y1, x2, y2 = bbox
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        centroid = (cx, cy)
+
+        # Get previous centroid and update history
+        prev_centroid = history.get(track_id)
+        history[track_id] = centroid
 
         vehicles.append({
-            "id":            track.get("id"),
+            "id":            track_id,
             "lane":          lane,
             "bbox":          bbox,
+            "centroid":      centroid,
+            "prev_centroid": prev_centroid,
             "class":         track.get("class"),
             "confidence":    track.get("confidence"),
             "direction":     "stable", # ByteTrack handles stability
@@ -59,18 +77,19 @@ def build_frame_output(
     # ── Light-based emergency detection ─────────────────────────
     # Runs on the BGR frame for accurate HSV colour analysis.
     # Draws orange boxes on debug_frame directly.
-    light_emergency_lanes = emergency_light_detector.detect(
-        frame_bgr, lane_mapper, debug_frame
+    emergency_output = emergency_light_detector.detect(
+        frame_bgr, lane_mapper, debug_frame, vehicles
     )
+    detected_blobs = emergency_output["detected_blobs"]
+    matched_vehicle_ids = emergency_output["matched_vehicle_ids"]
+    light_emergency_lanes = list(set(b["lane"] for b in detected_blobs))
 
     # ── Merge both emergency sources ─────────────────────────────
     # Either method flagging a lane is enough to trigger alert.
     all_emergency_lanes = list(set(yolo_emergency_lanes + light_emergency_lanes))
 
     # Merge emergency vehicle IDs from both sources
-    # yolo_emergency_ids: specific truck/bus IDs from area+speed heuristic
-    # light source doesn't give vehicle IDs (it works from pixel blobs)
-    all_emergency_vehicle_ids = yolo_emergency_ids
+    all_emergency_vehicle_ids = set(yolo_emergency_ids).union(matched_vehicle_ids)
 
     # ── Collision detection ──────────────────────────────────────
     # Run BEFORE stripping centroid keys — collision detector needs them.
@@ -154,6 +173,7 @@ def run_pipeline(
     Yields one structured output dict per processed frame.
     """
     print("[Pipeline] Initialising modules...")
+    build_frame_output._track_history = {}
 
     detector            = VehicleDetector(detector_config or DETECTOR_CONFIG)
     lane_mapper         = LaneMapper(lane_config          or LANE_CONFIG)
