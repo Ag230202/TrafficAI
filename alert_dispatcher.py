@@ -201,47 +201,55 @@ class AlertDispatcher:
         if not self.cfg.get("telegram_enabled"):
             return False
 
-        try:
-            import requests
-            
-            token = self.cfg.get("telegram_bot_token")
-            chat_id = self.cfg.get("telegram_chat_id")
-            url = f"https://api.telegram.org/bot{token}/sendPhoto"
+        def _async_send():
+            try:
+                import requests
+                
+                token = self.cfg.get("telegram_bot_token")
+                chat_id = self.cfg.get("telegram_chat_id")
+                url = f"https://api.telegram.org/bot{token}/sendPhoto"
 
-            # Format the caption using HTML (more robust than Markdown for underscores)
-            caption = (
-                f"🚨 <b>TRAFFIC AI ACCIDENT ALERT</b> 🚨\n\n"
-                f"📍 <b>Location:</b> {report.get('lane', 'Unknown Lane')}\n"
-                f"⚠️ <b>Severity:</b> {str(report.get('severity')).upper()}\n"
-                f"⏱️ <b>Time:</b> {report.get('timestamp')}\n"
-                f"🚗 <b>Vehicles Involved IDs:</b> {report.get('vehicle_ids')}\n\n"
-                f"System Confidence Score: {report.get('score')} / 100"
-            )
+                # Format the caption using HTML (more robust than Markdown for underscores)
+                caption = (
+                    f"🚨 <b>TRAFFIC AI ACCIDENT ALERT</b> 🚨\n\n"
+                    f"📍 <b>Location:</b> {report.get('lane', 'Unknown Lane')}\n"
+                    f"⚠️ <b>Severity:</b> {str(report.get('severity')).upper()}\n"
+                    f"⏱️ <b>Time:</b> {report.get('timestamp')}\n"
+                    f"🚗 <b>Vehicles Involved IDs:</b> {report.get('vehicle_ids')}\n\n"
+                    f"System Confidence Score: {report.get('score')} / 100"
+                )
 
-            files = {}
-            if os.path.exists(snapshot_path):
-                files = {'photo': open(snapshot_path, 'rb')}
+                files = {}
+                if os.path.exists(snapshot_path):
+                    files = {'photo': open(snapshot_path, 'rb')}
 
-            data = {
-                'chat_id': chat_id,
-                'caption': caption,
-                'parse_mode': 'HTML'
-            }
+                data = {
+                    'chat_id': chat_id,
+                    'caption': caption,
+                    'parse_mode': 'HTML'
+                }
 
-            if files:
-                response = requests.post(url, data=data, files=files, timeout=10)
-            else:
-                # Fallback to text only if image is missing
-                url_text = f"https://api.telegram.org/bot{token}/sendMessage"
-                data_text = {'chat_id': chat_id, 'text': caption, 'parse_mode': 'HTML'}
-                response = requests.post(url_text, data=data_text, timeout=5)
+                if files:
+                    response = requests.post(url, data=data, files=files, timeout=10)
+                else:
+                    # Fallback to text only if image is missing
+                    url_text = f"https://api.telegram.org/bot{token}/sendMessage"
+                    data_text = {'chat_id': chat_id, 'text': caption, 'parse_mode': 'HTML'}
+                    response = requests.post(url_text, data=data_text, timeout=5)
 
-            if response.status_code != 200:
-                self._log.warning(f"[TELEGRAM BOT] Telegram API Error {response.status_code}: {response.text}")
-                return False
+                if response.status_code != 200:
+                    self._log.warning(f"[TELEGRAM BOT] Telegram API Error {response.status_code}: {response.text}")
+                else:
+                    self._log.info(f"[TELEGRAM BOT] Alert and snapshot successfully delivered!")
 
-            return True
+            except Exception as e:
+                self._log.warning(f"[TELEGRAM BOT] System Error: {e}")
 
-        except Exception as e:
-            self._log.warning(f"[TELEGRAM BOT] System Error: {e}")
-            return False
+        import threading
+        # Run the HTTP request in a background thread so the dashboard doesn't stutter
+        thread = threading.Thread(target=_async_send)
+        thread.daemon = True
+        thread.start()
+
+        # Return True immediately so the pipeline can continue to the next frame
+        return True

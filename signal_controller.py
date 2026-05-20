@@ -116,6 +116,9 @@ class SignalControllerState:
     target_phase_id: Optional[int] = None
     current_override: Optional[str] = None
     last_emergency_approach_lane: Optional[str] = None
+    # New fields for persistent emergency handling
+    emergency_active: bool = False
+    emergency_target_phase_id: Optional[int] = None
     
     def reset_phase(self, phase_id: int, frame_id: int, all_phases: dict):
         """Reset counters when transitioning to a new phase."""
@@ -269,11 +272,39 @@ class SignalController:
         
         # ── Check for emergency preemption (bypassed if collision is active) ──
         collision_active = len(self.state.collision_cooldown) > 0
+        # -----------------------------------------------------------------
+        # Emergency handling – persistent preemption
+        # -----------------------------------------------------------------
+        # If we are already in emergency mode, keep the lane green until the
+        # emergency vehicle disappears.
+        if self.state.emergency_active:
+            if not emergency_lane:
+                # Emergency cleared – turn off flag and fall through to normal logic
+                self.state.emergency_active = False
+                self.state.emergency_target_phase_id = None
+            else:
+                # Continue holding the current emergency phase green.
+                self.state.elapsed_in_phase += frame_delta
+                # Build output for the emergency phase (no yellow transition)
+                phase_def = self.phases[self.state.current_phase_id]
+                output = self._build_phase_output(
+                    phase_def, lane_counts, [], frame_id,
+                    override_reason="emergency_preemption",
+                    green_override=self.state.phase_green_duration,
+                    emergency_lanes=emergency_lane
+                )
+                if self.config.get("debug_mode", False):
+                    print(f"[Signal] Frame {frame_id}: EMERGENCY CONTINUE → {output.phase_name}")
+                return output
+
+        # If we are not currently in emergency mode, check for a new emergency.
         if self.config.get("emergency_preemption", True) and emergency_lane and not collision_active:
-            # Immediate phase switch to first emergency lane's phase
             output = self._handle_emergency_preemption(
                 emergency_lane, lane_counts, frame_id
             )
+            # Mark persistent emergency state
+            self.state.emergency_active = True
+            self.state.emergency_target_phase_id = self.state.current_phase_id
             if self.config.get("debug_mode", False):
                 print(f"[Signal] Frame {frame_id}: EMERGENCY PREEMPTION → {output.phase_name}")
             return output
@@ -394,6 +425,9 @@ class SignalController:
         
         # Force switch to emergency phase
         self.state.reset_phase(target_phase_id, frame_id, self.phases)
+        # Mark emergency active state in controller
+        self.state.emergency_active = True
+        self.state.emergency_target_phase_id = target_phase_id
         emergency_duration = self.config.get("emergency_duration", 25)
         self.state.phase_green_duration = emergency_duration
         
