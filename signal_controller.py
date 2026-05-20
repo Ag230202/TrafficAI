@@ -37,21 +37,20 @@ import json
 # ─────────────────────────────────────────────────────────────────
 
 SIGNAL_CONFIG = {
-    # ── Timing (seconds) ────────────────────────────────────────
-    "cycle_duration":           60,      # Total time for one full phase rotation
-    "base_green_duration":      20,      # Starting green for each phase
-    "min_green_duration":       8,       # Never go below this (pedestrians, etc.)
-    "max_green_duration":       50,      # Never exceed this (prevent too-long waits)
-    "yellow_duration":          4,       # Time to show yellow before switching
-    "all_red_duration":         1,       # Safety gap between phases
+    # ── Timing (frames) ─────────────────────────────────────────
+    "cycle_duration":           20,      # Total frames for one full phase rotation
+    "base_green_duration":      5,       # Default green frames per phase
+    "min_green_duration":       3,       # Never go below 3 processed frames
+    "max_green_duration":       15,      # Never exceed 15 processed frames
+    "yellow_duration":          1,       # 1 frame yellow transition
+    "all_red_duration":         1,       # 1 frame safety gap between phases
     
     # ── Emergency settings ──────────────────────────────────────
-    "emergency_duration":       25,      # Green time for emergency vehicles
+    "emergency_duration":       8,       # 8 frames green for emergency vehicles
     "emergency_preemption":     True,    # Enable emergency priority
     
     # ── Density scaling ─────────────────────────────────────────
     "density_scaling_factor":   0.8,     # How aggressively to scale by demand
-                                          # Higher = more responsive to density
     "enable_adaptive":          True,    # Scale green time by lane counts
     "use_dqn":                  False,   # Phase 3 offline reinforcement learning
     
@@ -60,7 +59,7 @@ SIGNAL_CONFIG = {
     "max_wait_cycles":           3,       # Promote a lane after being skipped this many times
     
     # ── Collision handling ──────────────────────────────────────
-    "collision_red_timeout":    1800,    # Keep lane red for 1800 frames (3 mins) after collision
+    "collision_red_timeout":    60,      # Keep lane red for 60 frames after collision
     "enable_collision_override": True,   # Hard-stop traffic into collision zone
     
     # ── Phase definitions — ONE lane green at a time ────────────

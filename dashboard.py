@@ -348,7 +348,9 @@ def pipeline_thread(source_path: str, config: dict):
         crash_det   = CrashDetector()
         alert_disp  = AlertDispatcher()
         sig_ctrl    = SignalController(SIGNAL_CONFIG)
-        sig_ctrl.set_frame_rate(fps=30, frame_skip=preprocess_cfg.get("frame_skip", 3))
+        # Treat each processed frame as 1 time unit so the signal cycles
+        # proportionally to the number of frames seen, not wall-clock seconds.
+        sig_ctrl.set_frame_rate(fps=1, frame_skip=1)
 
         collision_logger = CollisionLogger(log_file="collision_log.txt")
         signal_logger     = SignalLogger(log_file="signal_log.txt")
