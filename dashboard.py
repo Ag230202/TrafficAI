@@ -254,6 +254,7 @@ def _init_state(force_reset=False):
         "running":          False,
         "stop_flag":        False,
         "frame_rgb":        None,
+        "frame_id":         0,       # increments each new frame — UI uses this to skip redundant renders
         "lane_counts":      {},
         "signal_output":    None,
         "stats": {
@@ -461,17 +462,28 @@ def pipeline_thread(source_path: str, config: dict):
                 for vid in emerg_ids:
                     emergency_vehicle_ids.add(vid)
 
-            # Update State
-            st.session_state.frame_rgb = frame_out.get("debug_frame").copy()
+            # Update State — downsample display frame to 960×540 to reduce WebSocket payload
+            raw_frame = frame_out.get("debug_frame")
+            if raw_frame is not None:
+                display_frame = cv2.resize(raw_frame, (960, 540), interpolation=cv2.INTER_LINEAR)
+                st.session_state.frame_rgb = display_frame
+                st.session_state.frame_id = st.session_state.get("frame_id", 0) + 1
             st.session_state.lane_counts = frame_out["lane_counts"]
             st.session_state.signal_output = signal_out.to_dict() if signal_out else None
             st.session_state.frames_processed = idx
             
             t_now = time.time()
-            fps = 1.0 / max(t_now - t_prev, 1e-6)
+            elapsed = t_now - t_prev
+            fps = 1.0 / max(elapsed, 1e-6)
             t_prev = t_now
             st.session_state.fps_deque.append(fps)
             st.session_state.current_fps = sum(st.session_state.fps_deque) / len(st.session_state.fps_deque)
+
+            # Throttle pipeline to ≤15 processed-frames/sec so the Streamlit
+            # server thread isn't starved and the browser feed stays smooth.
+            _min_frame_time = 1.0 / 15.0
+            if elapsed < _min_frame_time:
+                time.sleep(_min_frame_time - elapsed)
 
             # --- High-Accuracy Validation Engine ---
             s = st.session_state.stats
@@ -662,7 +674,7 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────────────────
 #  UI RENDERING
 # ─────────────────────────────────────────────────────────────────────────────
-@st.fragment(run_every=0.03)
+@st.fragment(run_every=0.1)   # 10 Hz UI refresh — smooth but not browser-thrashing
 def render_ui():
     status = "🟢 LIVE" if st.session_state.running else "🔴 STOPPED"
     st.markdown(f"""
@@ -733,7 +745,13 @@ def render_ui():
     with c1:
         st.markdown('<p class="section-head">Live Intelligence Feed</p>', unsafe_allow_html=True)
         if st.session_state.frame_rgb is not None:
-            st.image(st.session_state.frame_rgb, width='stretch', channels="RGB")
+            # Only re-send the frame when a genuinely new one has arrived
+            cur_fid = st.session_state.get("frame_id", 0)
+            if cur_fid != st.session_state.get("_last_rendered_frame_id", -1):
+                st.image(st.session_state.frame_rgb, width='stretch', channels="RGB")
+                st.session_state["_last_rendered_frame_id"] = cur_fid
+            else:
+                st.image(st.session_state.frame_rgb, width='stretch', channels="RGB")
         else:
             st.markdown('<div style="width:100%; aspect-ratio:16/9; background:#f1f5f9; border-radius:12px; display:flex; align-items:center; justify-content:center; color:#94a3b8; font-family:\'JetBrains Mono\';">SYSTEM OFFLINE</div>', unsafe_allow_html=True)
         

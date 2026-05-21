@@ -312,14 +312,13 @@ class CrashDetector:
 
     def _check_bbox_overlap(self, collisions: list, lane: str) -> int:
         """
-        Signal 1: +40 if any existing CollisionDetector collision event
-        involves this lane AND its IoU meets the higher crash threshold (0.3).
-
-        The CollisionDetector already filtered for IoU ≥ 0.05 and closing speed.
-        We re-check against the crash threshold (0.30) for higher confidence.
+        Signal 1: +85 for intersection center (immediate trigger), +45 for approach lanes.
+        This allows raw overlap to confirm an intersection T-bone instantly, while
+        requiring a second signal (like ID vanish) for approach lanes to filter out
+        queueing cars.
         """
-        iou_threshold = self.cfg.get("iou_threshold", 0.30)
-        score_value   = self.cfg.get("score_bbox_overlap", 40)
+        iou_threshold = self.cfg.get("iou_threshold", 0.01)
+        score_value = 85 if lane == "intersection_center" else 45
 
         for c in collisions:
             if c.get("lane") == lane and c.get("iou", 0) >= iou_threshold:

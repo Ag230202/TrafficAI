@@ -85,11 +85,26 @@ def build_frame_output(
     light_emergency_lanes = list(set(b["lane"] for b in detected_blobs))
 
     # ── Merge both emergency sources ─────────────────────────────
+    # Maintain a persistent set of known emergency IDs
+    if not hasattr(build_frame_output, "_known_emergency_ids"):
+        build_frame_output._known_emergency_ids = set()
+    known_emergencies = build_frame_output._known_emergency_ids
+    
+    # Merge newly detected emergency vehicle IDs
+    new_emergency_ids = set(yolo_emergency_ids).union(matched_vehicle_ids)
+    known_emergencies.update(new_emergency_ids)
+    
     # Either method flagging a lane is enough to trigger alert.
     all_emergency_lanes = list(set(yolo_emergency_lanes + light_emergency_lanes))
 
-    # Merge emergency vehicle IDs from both sources
-    all_emergency_vehicle_ids = set(yolo_emergency_ids).union(matched_vehicle_ids)
+    # Re-inject lanes for any currently tracked vehicle that was PREVIOUSLY identified as an emergency vehicle
+    for v in vehicles:
+        if v.get("id") in known_emergencies and v.get("lane"):
+            all_emergency_lanes.append(v["lane"])
+            
+    # Deduplicate
+    all_emergency_lanes = list(set(all_emergency_lanes))
+    all_emergency_vehicle_ids = known_emergencies.intersection(set(v.get("id") for v in vehicles))
 
     # ── Collision detection ──────────────────────────────────────
     # Run BEFORE stripping centroid keys — collision detector needs them.

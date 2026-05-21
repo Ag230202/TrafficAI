@@ -43,13 +43,11 @@ from datetime import datetime
 COLLISION_CONFIG = {
     # Minimum bounding box overlap (Intersection over Union) to consider
     # two vehicles as physically occupying the same space.
-    # Lowered to 0.02 to reliably catch minor contacts and corner collisions.
-    "iou_threshold": 0.02,
+    "iou_threshold": 0.05,
 
     # Minimum closing speed in pixels/frame for both vehicles combined.
     # Filters out stationary neighbours and slow lane-merges.
-    # Set to 2.0 to catch slow-speed and deceleration phase crashes.
-    "min_closing_speed": 2.0,
+    "min_closing_speed": 3.0,
 
     # Frames to suppress re-flagging the same vehicle pair after a collision.
     # Set to 99999 to ensure each unique pair is logged exactly once (100% unique events).
