@@ -55,7 +55,7 @@ import numpy as np
 
 CRASH_DETECTOR_CONFIG = {
     # ── Signal scores ──────────────────────────────────────────
-    "score_bbox_overlap":      85,   # Increased so a single valid collision from CollisionDetector triggers probable
+    "score_bbox_overlap":      70,   # Increased to trigger alerts on bbox overlap
     "score_id_vanish":         35,   # 3+ IDs vanish from same lane at once
     "score_count_drop":        30,   # Lane count drops ≥ count_drop_threshold
     "score_direction_conflict": 25,  # Two vehicles heading toward each other
@@ -64,12 +64,12 @@ CRASH_DETECTOR_CONFIG = {
     "iou_threshold":           0.01, # Lowered to 0.01 to match any low-level collision overlap
     "min_vanish_count":        4,    # Min IDs vanishing to score the signal
     "count_drop_threshold":    3,    # Min vehicle count drop to score signal
-    "persistence_frames":      1,    # Confirms crash on the very first frame of contact for instant alerting
+    "persistence_frames":      3,    # Must persist for 3 frames to avoid early/false positives
 
     # ── Confidence bands ────────────────────────────────────────
-    "threshold_possible":      50,   # Score ≥ 50: possible crash, log only
-    "threshold_probable":      80,   # Score ≥ 80: probable, log + snapshot
-    "threshold_confirmed":     100,  # Score ≥ 100: confirmed, full alert
+    "threshold_possible":      40,   # Lowered to start persistence earlier
+    "threshold_probable":      60,   # Lowered to emit probable alerts with single bbox signal
+    "threshold_confirmed":     100,  # unchanged
 
     # ── Cooldown ────────────────────────────────────────────────
     "alert_cooldown_frames":   60,   # Min processed frames between alerts per lane

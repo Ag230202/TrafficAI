@@ -43,13 +43,22 @@ from datetime import datetime
 COLLISION_CONFIG = {
     # Minimum bounding box overlap (Intersection over Union) to consider
     # two vehicles as physically occupying the same space.
-    # Lowered to 0.02 to reliably catch minor contacts and corner collisions.
-    "iou_threshold": 0.02,
+    #
+    # Calibration for overhead fisheye camera:
+    #   0.01–0.04  → tracker jitter + parked cars touching (fisheye warp)  ← FALSE POSITIVE zone
+    #   0.05–0.09  → real corner clips, sideswipes, minor contacts          ← CATCH from here
+    #   0.10–0.25  → rear-end collisions
+    #   0.25+      → head-on / T-bone crashes
+    #
+    # 0.15 sits just above the noise floor while still catching all
+    # real physical contact events including orthogonal T-bones.
+    "iou_threshold": 0.15,
 
     # Minimum closing speed in pixels/frame for both vehicles combined.
-    # Filters out stationary neighbours and slow lane-merges.
-    # Set to 2.0 to catch slow-speed and deceleration phase crashes.
-    "min_closing_speed": 2.0,
+    # Tracker jitter produces ~1–3 px/frame apparent motion between frames.
+    # 6.0 clears that noise floor while catching any meaningful approach
+    # velocity (slow parking-lot bumps register ~5–8 px/frame overhead).
+    "min_closing_speed": 6.0,
 
     # Frames to suppress re-flagging the same vehicle pair after a collision.
     # Set to 99999 to ensure each unique pair is logged exactly once (100% unique events).
@@ -205,23 +214,31 @@ class CollisionDetector:
                 id_b = v_b.get("id")
                 pair_key = frozenset({id_a, id_b})
 
-                # ── Cooldown check ───────────────────────────────
-                last_flagged = self._cooldown.get(pair_key)
-                if last_flagged is not None:
-                    if frame_id - last_flagged < cooldown:
-                        continue  # still within suppression window
-
                 # ── Condition 1: bounding box overlap ───────────
                 iou = _compute_iou(v_a["bbox"], v_b["bbox"])
                 if iou < iou_thresh:
                     continue
 
-                # ── Condition 2: closing velocity check ─────────
+                # ── Cooldown / Latch check ─────────────────────────
+                # If they already collided within the last 30 frames, we consider
+                # them "crashed" and ignore the speed requirement since cars stop moving
+                # after they crash.
+                last_flagged = self._cooldown.get(pair_key)
+                recently_crashed = (last_flagged is not None and (frame_id - last_flagged) < 30)
+
+                # ── Condition 2: closing velocity & movement check ─────────
                 speed = _closing_speed(v_a, v_b)
-                # Vehicles must be actively converging at a minimum speed to be a crash.
-                # This filters out stationary vehicles queued in traffic that have overlapping 2D boxes.
-                if speed < min_speed:
-                    continue
+                speed_a = np.hypot(v_a.get("centroid")[0] - v_a.get("prev_centroid")[0], 
+                                   v_a.get("centroid")[1] - v_a.get("prev_centroid")[1]) if v_a.get("prev_centroid") else 0
+                speed_b = np.hypot(v_b.get("centroid")[0] - v_b.get("prev_centroid")[0], 
+                                   v_b.get("centroid")[1] - v_b.get("prev_centroid")[1]) if v_b.get("prev_centroid") else 0
+                is_moving = max(speed_a, speed_b) > min_speed
+
+                if not recently_crashed:
+                    # Vehicles must be actively converging at a minimum speed to be a crash.
+                    if speed < min_speed or not is_moving:
+                        continue
+
 
                 # ── Collision confirmed ──────────────────────────
                 self._cooldown[pair_key] = frame_id
@@ -242,7 +259,14 @@ class CollisionDetector:
                     "vehicle_b_cls": v_b.get("class", "unknown"),
                     "iou":           round(iou, 4),
                     "closing_speed": round(speed, 2),
-                    "lane":          v_a.get("lane"),   # lane of first vehicle
+                    # Use the shared lane if both vehicles are in the same lane;
+                    # otherwise attribute to intersection_center so the correct
+                    # collision_cooldown key is set in signal_controller.py.
+                    "lane":          (
+                        v_a.get("lane")
+                        if v_a.get("lane") == v_b.get("lane")
+                        else "intersection_center"
+                    ),
                     "bbox_overlap":  overlap_box,
                 }
                 collisions.append(collision)

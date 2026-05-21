@@ -7,8 +7,8 @@ Reads frame-by-frame traffic analysis (lane_counts, emergency_lane, collisions)
 and outputs phase timings with three priority layers:
   1. Emergency preemption (ambulances/fire trucks get priority)
   2. Collision red override (force red on lanes with active crashes)
-  3. Density-proportional green time (scale signal duration by vehicle count)
-  4. Anti-starvation guard (every lane gets min_green per cycle)
+  3. Anti-starvation promotion (starved lanes promoted after max_wait_cycles skips)
+  4. Density-proportional green time (scale signal duration by vehicle count)
 
 State management:
   - Tracks current phase and elapsed time within that phase
@@ -311,7 +311,58 @@ class SignalController:
         
         # ── Standard phase progression ───────────────────────────
         self.state.elapsed_in_phase += frame_delta
-        
+
+        # ── Layer 3: Anti-Starvation Promotion ──────────────────────────────
+        # Runs only in the standard (non-DQN) path, between Layer 2 (collision
+        # red override) and Layer 4 (density-proportional timing).
+        # Rules:
+        #   • Every cycle a lane does NOT get green, its skip_count (wait_cycle_count) += 1.
+        #   • When skip_count >= max_wait_cycles (default 3), the lane is immediately
+        #     promoted to the next green signal, regardless of vehicle density.
+        #   • On promotion the current phase must have served at least min_green_duration
+        #     frames so we never cut a phase below its minimum commitment.
+        #   • On receiving green, the lane's skip_count resets to 0 (done in reset_phase).
+        if (
+            self.config.get("enable_anti_starvation", True)
+            and not self.config.get("use_dqn", False)
+            and not self.state.is_yellow_mode
+        ):
+            starved_phase_id = self._check_anti_starvation_only()
+            if starved_phase_id is not None:
+                min_green_guard = self.config.get("min_green_duration", 3)
+                if self.state.elapsed_in_phase >= min_green_guard:
+                    # Identify the starved lane for logging before reset
+                    starved_phase_def = self.phases[starved_phase_id]
+                    starved_lane = next(
+                        iter(starved_phase_def.get("lanes", ["unknown"])), "unknown"
+                    )
+                    skip_count = self.state.wait_cycle_count.get(starved_lane, 0)
+
+                    # Force immediate transition: reset_phase increments skipped
+                    # lanes' counters and zeros the promoted lane's counter.
+                    self.state.reset_phase(starved_phase_id, frame_id, self.phases)
+                    self.state.current_override = "anti_starvation"
+
+                    phase_def = self.phases[self.state.current_phase_id]
+                    self.state.phase_green_duration = self._compute_adaptive_green_time(
+                        phase_def, lane_counts
+                    )
+
+                    output = self._build_phase_output(
+                        phase_def, lane_counts, collisions, frame_id,
+                        override_reason="anti_starvation",
+                        emergency_lanes=emergency_lane,
+                    )
+
+                    if self.config.get("debug_mode", False):
+                        print(
+                            f"[Signal] Frame {frame_id}: "
+                            f"ANTI-STARVATION → {output.phase_name} "
+                            f"(lane={starved_lane}, skip_count={skip_count})"
+                        )
+                    return output
+        # ── End Layer 3 ─────────────────────────────────────────────────────
+
         # Determine intent (Rule-based vs DQN)
         min_green = self.config.get("min_green_duration", 8)
         self.state.current_override = None
