@@ -58,7 +58,7 @@ EMERGENCY_LIGHT_CONFIG = {
     "min_color_pixels": 800,
 
     # Whether to draw debug blobs on the debug frame
-    "draw_debug": True,
+    "draw_debug": False,
 }
 
 

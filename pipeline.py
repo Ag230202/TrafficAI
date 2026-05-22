@@ -20,8 +20,13 @@ from tracker import CentroidTracker, TRACKER_CONFIG
 from lane_mapper import LaneMapper, LANE_CONFIG
 from emergency_detector import EmergencyLightDetector
 from collision_detector import CollisionDetector
+import cv2
 import numpy as np
+from collections import defaultdict
+import concurrent.futures
 
+# Global executor for pipeline parallelism
+_pipeline_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 def build_frame_output(
     frame_index: int,
@@ -29,7 +34,7 @@ def build_frame_output(
     frame_rgb,
     active_tracks: list,
     lane_mapper: LaneMapper,
-    emergency_light_detector: EmergencyLightDetector,
+    em_detector: EmergencyLightDetector,
     collision_detector: CollisionDetector,
     crash_detector=None
 ) -> dict:
@@ -74,29 +79,38 @@ def build_frame_output(
     # ── Create debug frame (RGB copy for drawing) ────────────────
     debug_frame = frame_rgb.copy()
 
-    # ── Light-based emergency detection ─────────────────────────
-    # Runs on the BGR frame for accurate HSV colour analysis.
-    # Draws orange boxes on debug_frame directly.
-    emergency_output = emergency_light_detector.detect(
-        frame_bgr, lane_mapper, debug_frame, vehicles
-    )
-    detected_blobs = emergency_output["detected_blobs"]
-    matched_vehicle_ids = emergency_output["matched_vehicle_ids"]
-    light_emergency_lanes = list(set(b["lane"] for b in detected_blobs))
-
     # ── Merge both emergency sources ─────────────────────────────
     # Maintain a persistent set of known emergency IDs
     if not hasattr(build_frame_output, "_known_emergency_ids"):
         build_frame_output._known_emergency_ids = set()
     known_emergencies = build_frame_output._known_emergency_ids
     
-    # Merge newly detected emergency vehicle IDs
-    new_emergency_ids = set(yolo_emergency_ids).union(matched_vehicle_ids)
-    known_emergencies.update(new_emergency_ids)
+    # ── Threaded Detection (Emergency + Collision) ────────────────
+    # Run these heavy checks in parallel since OpenCV releases the GIL
     
-    # Either method flagging a lane is enough to trigger alert.
-    all_emergency_lanes = list(set(yolo_emergency_lanes + light_emergency_lanes))
+    future_em = _pipeline_executor.submit(
+        em_detector.detect, frame_bgr, lane_mapper, debug_frame, vehicles
+    )
+    future_col = _pipeline_executor.submit(
+        collision_detector.detect, vehicles, frame_index, debug_frame
+    )
+    
+    em_res = future_em.result()
+    collisions = future_col.result()
 
+    detected_blobs = em_res.get("detected_blobs", [])
+    matched_vehicle_ids = em_res.get("matched_vehicle_ids", set())
+    
+    all_emergency_lanes = list(yolo_emergency_lanes)
+    for blob in detected_blobs:
+        lane = blob.get("lane")
+        if lane:
+            all_emergency_lanes.append(lane)
+            
+    # Add newly matched vehicle IDs from the bounding-box colour check
+    known_emergencies.update(matched_vehicle_ids)
+    known_emergencies.update(yolo_emergency_ids)
+            
     # Re-inject lanes for any currently tracked vehicle that was PREVIOUSLY identified as an emergency vehicle
     for v in vehicles:
         if v.get("id") in known_emergencies and v.get("lane"):
@@ -106,11 +120,6 @@ def build_frame_output(
     all_emergency_lanes = list(set(all_emergency_lanes))
     all_emergency_vehicle_ids = known_emergencies.intersection(set(v.get("id") for v in vehicles))
 
-    # ── Collision detection ──────────────────────────────────────
-    # Run BEFORE stripping centroid keys — collision detector needs them.
-    # Draws red overlap rectangles on debug_frame directly.
-    collisions = collision_detector.detect(vehicles, frame_index, debug_frame)
-
     colors = {
         "left_road": (0, 0, 255),    # Blue in RGB
         "bottom_road": (0, 255, 0),  # Green in RGB
@@ -119,14 +128,17 @@ def build_frame_output(
         "intersection_center": (255, 0, 255) # Magenta in RGB
     }
     
+    overlay = debug_frame.copy()
     for lane_name, polygon in lane_mapper.get_lane_boundaries().items():
         pts = np.array(polygon, dtype=np.int32).reshape((-1, 1, 2))
         color = colors.get(lane_name, (0, 255, 255))
-        
-        # draw filled transparent polygon
-        overlay = debug_frame.copy()
         cv2.fillPoly(overlay, [pts], color)
-        cv2.addWeighted(overlay, 0.3, debug_frame, 0.7, 0, debug_frame)
+        
+    cv2.addWeighted(overlay, 0.3, debug_frame, 0.7, 0, debug_frame)
+    
+    for lane_name, polygon in lane_mapper.get_lane_boundaries().items():
+        pts = np.array(polygon, dtype=np.int32).reshape((-1, 1, 2))
+        color = colors.get(lane_name, (0, 255, 255))
         
         # draw border
         cv2.polylines(debug_frame, [pts], isClosed=True, color=color, thickness=2)
