@@ -133,7 +133,7 @@ CUSTOM_SIGNAL_CONFIG = {
     # Density scaling
     "density_scaling_factor":   0.8,     # 0.0-1.0 (higher = more responsive)
     "enable_adaptive":          True,    # Scale green by demand
-    "use_dqn":                  False,    # Enable DQN
+    "use_dqn":                  True,    # Enable DQN
     
     # Collision handling
     "collision_red_timeout":    1800,    # Keep red for 1800 frames after crash

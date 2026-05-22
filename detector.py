@@ -60,7 +60,8 @@ class VehicleDetector:
             classes=self.target_classes,
             verbose=False,
             device=self.device,
-            tracker="bytetrack.yaml"
+            tracker="bytetrack.yaml",
+            agnostic_nms=True  # Suppress cross-class duplicates BEFORE tracking
         )
         
         return self._parse_tracking_results(results[0])
@@ -83,20 +84,7 @@ class VehicleDetector:
                 "id": track_id
             })
             
-        # Post-process: Deduplicate highly overlapping duplicate detections (IoU >= 0.70)
-        # Sort by confidence so we keep the most confident detection
-        detections = sorted(detections, key=lambda x: x["confidence"], reverse=True)
-        keep = []
-        for d in detections:
-            duplicate = False
-            for k in keep:
-                if _compute_iou(d["bbox"], k["bbox"]) >= 0.70:
-                    duplicate = True
-                    break
-            if not duplicate:
-                keep.append(d)
-                
-        return keep
+        return detections
 
     @property
     def class_names(self) -> dict:

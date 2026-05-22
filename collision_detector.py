@@ -43,22 +43,11 @@ from datetime import datetime
 COLLISION_CONFIG = {
     # Minimum bounding box overlap (Intersection over Union) to consider
     # two vehicles as physically occupying the same space.
-    #
-    # Calibration for overhead fisheye camera:
-    #   0.01–0.04  → tracker jitter + parked cars touching (fisheye warp)  ← FALSE POSITIVE zone
-    #   0.05–0.09  → real corner clips, sideswipes, minor contacts          ← CATCH from here
-    #   0.10–0.25  → rear-end collisions
-    #   0.25+      → head-on / T-bone crashes
-    #
-    # 0.15 sits just above the noise floor while still catching all
-    # real physical contact events including orthogonal T-bones.
-    "iou_threshold": 0.15,
+    "iou_threshold": 0.05,
 
     # Minimum closing speed in pixels/frame for both vehicles combined.
-    # Tracker jitter produces ~1–3 px/frame apparent motion between frames.
-    # 6.0 clears that noise floor while catching any meaningful approach
-    # velocity (slow parking-lot bumps register ~5–8 px/frame overhead).
-    "min_closing_speed": 6.0,
+    # Filters out stationary neighbours and slow lane-merges.
+    "min_closing_speed": 3.0,
 
     # Frames to suppress re-flagging the same vehicle pair after a collision.
     # Set to 99999 to ensure each unique pair is logged exactly once (100% unique events).
