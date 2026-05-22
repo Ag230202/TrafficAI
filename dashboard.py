@@ -273,6 +273,13 @@ def _init_state(force_reset=False):
         "frames_processed": 0,
         "prev_lane_counts": {},
         "prev_lane_totals": {},
+        # ── Anti-Starvation Monitor state ──────────────────────────
+        "as_skip_counts":       {"left_road": 0, "top_road": 0, "right_road": 0, "bottom_road": 0},
+        "as_total_frames":      0,   # Total frame count for Frame X / N display
+        "as_event_log":         deque(maxlen=200),
+        "as_total_events":      0,
+        "as_green_lane":        None,
+        "as_green_reason":      None,
     }
     for k, v in defaults.items():
         if k not in st.session_state or force_reset:
@@ -466,6 +473,30 @@ def pipeline_thread(source_path: str, config: dict):
             st.session_state.lane_counts = frame_out["lane_counts"]
             st.session_state.signal_output = signal_out.to_dict() if signal_out else None
             st.session_state.frames_processed = idx
+
+            # ── Anti-Starvation Monitor update ──────────────────────
+            if signal_out:
+                sig_dict = signal_out.to_dict()
+                meta = sig_dict.get("metadata", {})
+                skip_counts = meta.get("wait_cycle_count", {})
+                st.session_state.as_skip_counts = {
+                    "left_road":   skip_counts.get("left_road", 0),
+                    "top_road":    skip_counts.get("top_road", 0),
+                    "right_road":  skip_counts.get("right_road", 0),
+                    "bottom_road": skip_counts.get("bottom_road", 0),
+                }
+                active = sig_dict.get("active_lanes", [])
+                st.session_state.as_green_lane   = active[0] if active else None
+                st.session_state.as_green_reason = sig_dict.get("override_reason", "")
+
+                if sig_dict.get("override_reason") == "anti_starvation" and active:
+                    promoted_lane = active[0]
+                    skip_val = skip_counts.get(promoted_lane, 0)
+                    event_msg = f"Frame {idx:>04} → {promoted_lane.replace('_road','').capitalize()} lane promoted (skipped {skip_val} cycles)"
+                    st.session_state.as_event_log.appendleft(event_msg)
+                    st.session_state.as_total_events += 1
+
+            st.session_state.as_total_frames = total_frames
             
             t_now = time.time()
             fps = 1.0 / max(t_now - t_prev, 1e-6)
@@ -784,5 +815,129 @@ def render_ui():
                 st.markdown('<div style="color:#166534; background:#dcfce7; border-radius:8px; padding:10px; text-align:center; font-size:0.75rem; font-weight:700;">✓ SYSTEM CLEAR</div>', unsafe_allow_html=True)
         else:
             st.markdown('<div style="color:#94a3b8; font-size:0.75rem; text-align:center;">Waiting for stream...</div>', unsafe_allow_html=True)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # ANTI-STARVATION MONITOR
+    # ─────────────────────────────────────────────────────────────────────
+    st.markdown('<hr style="margin:20px 0 12px; border:0; border-top:2px solid #e2e8f0;">', unsafe_allow_html=True)
+    st.markdown("""
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+      <span style="font-size:1.35rem;">⚖️</span>
+      <span style="font-family:'Barlow Condensed',sans-serif; font-size:1.1rem; font-weight:800;
+                   letter-spacing:3px; text-transform:uppercase; color:#1e293b;">Anti-Starvation Monitor</span>
+      <span style="font-size:0.62rem; letter-spacing:2px; color:#64748b; text-transform:uppercase;
+                   background:#f1f5f9; border-radius:100px; padding:2px 10px; margin-left:4px;">Live</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    _lanes_order = ["left_road", "top_road", "right_road", "bottom_road"]
+    _lane_labels = {"left_road": "LEFT", "top_road": "TOP", "right_road": "RIGHT", "bottom_road": "BOTTOM"}
+    _lane_colors = {"left_road": "#2563eb", "top_road": "#eab308", "right_road": "#22c55e", "bottom_road": "#ef4444"}
+
+    # Row 1 — frame counter + total events card
+    as_r1_left, as_r1_right = st.columns([3, 1])
+    with as_r1_left:
+        cur_f = st.session_state.frames_processed
+        tot_f = st.session_state.as_total_frames
+        st.markdown(
+            f'<div class="metric-card" style="--accent:#0ea5e9; text-align:left; padding:12px 18px;">'
+            f'<span style="font-family:\'JetBrains Mono\'; font-size:1.6rem; font-weight:700; color:#0ea5e9;">'
+            f'Frame {cur_f:>5}'
+            f'</span>'
+            f'<span style="font-family:\'JetBrains Mono\'; font-size:1rem; color:#94a3b8;"> / {tot_f}</span>'
+            f'<div class="metric-label">CURRENT FRAME BEING PROCESSED</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+    with as_r1_right:
+        as_ev = st.session_state.as_total_events
+        accent = "#ef4444" if as_ev > 0 else "#22c55e"
+        st.markdown(
+            f'<div class="metric-card" style="--accent:{accent};">'
+            f'<div class="metric-val" style="color:{accent};">{as_ev}</div>'
+            f'<div class="metric-label">ANTI-STARVATION EVENTS</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+    st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
+
+    # Row 2 — vehicle count + skip counter per lane (2 rows of 4)
+    as_col_headers = st.columns(4)
+    lc_now = st.session_state.lane_counts
+    skip_now = st.session_state.as_skip_counts
+
+    for i, lane in enumerate(_lanes_order):
+        cnt  = lc_now.get(lane, 0)
+        skip = skip_now.get(lane, 0)
+        col_hex = _lane_colors[lane]
+
+        # Skip counter color
+        if skip >= 3:
+            sk_bg, sk_fg, sk_border, sk_label = "#fee2e2", "#991b1b", "#ef4444", "⚠ ANTI-STARVATION"
+        elif skip == 2:
+            sk_bg, sk_fg, sk_border, sk_label = "#fef9c3", "#854d0e", "#eab308", "WARNING"
+        else:
+            sk_bg, sk_fg, sk_border, sk_label = "#dcfce7", "#166534", "#22c55e", "NORMAL"
+
+        as_col_headers[i].markdown(
+            f'<div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:10px 8px; text-align:center;">'
+            f'  <div style="font-size:0.58rem; letter-spacing:2px; text-transform:uppercase; color:{col_hex}; font-weight:700; margin-bottom:4px;">{_lane_labels[lane]}</div>'
+            f'  <div style="font-size:1.5rem; font-weight:800; color:{col_hex}; font-family:\'JetBrains Mono\';">'
+            f'    {cnt} <span style="font-size:0.6rem; color:#94a3b8; font-weight:400;">veh</span>'
+            f'  </div>'
+            f'  <div style="margin-top:6px; background:{sk_bg}; border:1px solid {sk_border}; border-radius:6px; padding:3px 6px;">'
+            f'    <span style="font-family:\'JetBrains Mono\'; font-size:0.75rem; font-weight:700; color:{sk_fg};">skip {skip}</span>'
+            f'    <div style="font-size:0.52rem; letter-spacing:1px; color:{sk_fg}; text-transform:uppercase;">{sk_label}</div>'
+            f'  </div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+    st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
+
+    # Row 3 — current signal status per lane
+    st.markdown('<p class="section-head">Current Signal Status</p>', unsafe_allow_html=True)
+    green_lane   = st.session_state.as_green_lane
+    green_reason = st.session_state.as_green_reason or ""
+
+    sig_status_cols = st.columns(4)
+    for i, lane in enumerate(_lanes_order):
+        is_green = (lane == green_lane)
+        is_as    = is_green and "anti_starvation" in green_reason
+        if is_green:
+            pill_cls = "sig-yellow" if is_as else "sig-green"
+            label    = "GREEN · anti_starvation" if is_as else "GREEN · density"
+        else:
+            pill_cls = "sig-red"
+            label    = "RED"
+        sig_status_cols[i].markdown(
+            f'<div style="text-align:center;">'
+            f'  <div style="font-size:0.58rem; letter-spacing:2px; text-transform:uppercase; '
+            f'       color:{_lane_colors[lane]}; font-weight:700; margin-bottom:4px;">{_lane_labels[lane]}</div>'
+            f'  <span class="signal-pill {pill_cls}" style="font-size:0.62rem;">'
+            f'    <span class="sig-dot"></span>{label}'
+            f'  </span>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+    st.markdown('<div style="height:10px;"></div>', unsafe_allow_html=True)
+
+    # Row 4 — scrolling anti-starvation event log
+    st.markdown('<p class="section-head">Anti-Starvation Event Log</p>', unsafe_allow_html=True)
+    as_log = list(st.session_state.as_event_log)
+    log_box = '<div style="max-height:160px; overflow-y:auto; background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:8px;">'
+    if not as_log:
+        log_box += '<div style="color:#94a3b8; font-size:0.75rem; text-align:center; padding:8px;">No anti-starvation events yet.</div>'
+    else:
+        for entry in as_log:
+            log_box += (
+                f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.72rem; '
+                f'padding:4px 8px; border-bottom:1px solid #f1f5f9; color:#b91c1c; font-weight:600;">'
+                f'⚖ {entry}</div>'
+            )
+    log_box += '</div>'
+    st.markdown(log_box, unsafe_allow_html=True)
 
 render_ui()
