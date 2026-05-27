@@ -118,7 +118,15 @@ def build_frame_output(
             
     # Deduplicate
     all_emergency_lanes = list(set(all_emergency_lanes))
-    all_emergency_vehicle_ids = known_emergencies.intersection(set(v.get("id") for v in vehicles))
+    # Intersect with currently tracked IDs so only ACTIVE vehicles count
+    current_vehicle_ids = set(v.get("id") for v in vehicles if v.get("id") is not None)
+    all_emergency_vehicle_ids = known_emergencies.intersection(current_vehicle_ids)
+
+    # FIX: Prune stale IDs — remove IDs from known_emergencies that are no
+    # longer being tracked. Without this, an emergency flag set by a vehicle
+    # that has since left the scene (or whose tracker ID was recycled) persists
+    # forever, triggering spurious emergency lanes even when no vehicle exists.
+    known_emergencies.intersection_update(current_vehicle_ids)
 
     colors = {
         "left_road": (0, 0, 255),    # Blue in RGB
