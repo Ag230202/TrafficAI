@@ -45,9 +45,9 @@ EMERGENCY_LIGHT_CONFIG = {
     # OpenCV HSV: H=0-179, S=0-255, V=0-255
     # Adjusted S/V limits to 150 to capture daytime paint markings on static ambulances.
     "color_ranges": {
-        # Red — fire trucks, ambulances, police (red wraps around hue)
-        "red_low":  {"lower": (0,   200, 200), "upper": (10,  255, 255)},
-        "red_high": {"lower": (165, 200, 200), "upper": (179, 255, 255)},
+        # Red — fire trucks, ambulances, police. V raised to 240 to ignore red paint.
+        "red_low":  {"lower": (0,   200, 240), "upper": (10,  255, 255)},
+        "red_high": {"lower": (165, 200, 240), "upper": (179, 255, 255)},
         # Blue — police lights
         "blue":     {"lower": (100, 200, 200), "upper": (130, 255, 255)},
         # Amber/orange — ambulance, roadwork, some fire trucks
