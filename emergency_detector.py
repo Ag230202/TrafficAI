@@ -86,6 +86,20 @@ class EmergencyLightDetector:
 
         Returns: dict with keys "detected_blobs" (list of dicts) and "matched_vehicle_ids" (set)
         """
+        # FIX: No vehicles tracked → no emergency vehicle possible.
+        # Skip all expensive color analysis to avoid false positives from
+        # traffic lights, building reflections, or sunlit surfaces.
+        if not vehicles:
+            return {"detected_blobs": [], "matched_vehicle_ids": set()}
+
+        # Build a set of lanes that currently have at least one tracked vehicle.
+        # Color blobs will only be accepted if a real vehicle occupies the same lane.
+        occupied_lanes = set(
+            v.get("lane") for v in vehicles if v.get("lane") is not None
+        )
+        if not occupied_lanes:
+            return {"detected_blobs": [], "matched_vehicle_ids": set()}
+
         hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
         detected_blobs = []
         matched_vehicle_ids = set()
@@ -114,27 +128,30 @@ class EmergencyLightDetector:
                     np.array(ranges["upper"]))
                 combined_mask = cv2.bitwise_or(combined_mask, mask)
 
-        # High-precision color density check within each vehicle bounding box
-        if vehicles:
-            h_img, w_img = combined_mask.shape[:2]
-            for v in vehicles:
-                bbox = v.get("bbox")
-                if bbox:
-                    vx1, vy1, vx2, vy2 = bbox
-                    x1_c = max(0, min(vx1, w_img - 1))
-                    y1_c = max(0, min(vy1, h_img - 1))
-                    x2_c = max(0, min(vx2, w_img - 1))
-                    y2_c = max(0, min(vy2, h_img - 1))
-                    
-                    if x2_c > x1_c and y2_c > y1_c:
-                        crop = combined_mask[y1_c:y2_c, x1_c:x2_c]
-                        color_pixels = cv2.countNonZero(crop)
-                        # Require a dense cluster of active emergency color pixels (at least 500px)
-                        # inside the vehicle bounding box to classify as emergency vehicle.
-                        if color_pixels >= 500:
-                            vid = v.get("id")
-                            if vid is not None and vid != -1:
-                                matched_vehicle_ids.add(vid)
+        # High-precision color density check within each vehicle bounding box.
+        # FIX: Only process vehicles that have a valid lane assignment —
+        # an out-of-polygon vehicle cannot meaningfully flag a lane.
+        h_img, w_img = combined_mask.shape[:2]
+        for v in vehicles:
+            if v.get("lane") is None:
+                continue  # FIX: skip vehicles with no valid lane
+            bbox = v.get("bbox")
+            if bbox:
+                vx1, vy1, vx2, vy2 = bbox
+                x1_c = max(0, min(vx1, w_img - 1))
+                y1_c = max(0, min(vy1, h_img - 1))
+                x2_c = max(0, min(vx2, w_img - 1))
+                y2_c = max(0, min(vy2, h_img - 1))
+
+                if x2_c > x1_c and y2_c > y1_c:
+                    crop = combined_mask[y1_c:y2_c, x1_c:x2_c]
+                    color_pixels = cv2.countNonZero(crop)
+                    # Require a dense cluster of active emergency color pixels (at least 500px)
+                    # inside the vehicle bounding box to classify as emergency vehicle.
+                    if color_pixels >= 500:
+                        vid = v.get("id")
+                        if vid is not None and vid != -1:
+                            matched_vehicle_ids.add(vid)
 
         # Morphological close to join nearby bright pixels into blobs for lane mapping
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
@@ -164,7 +181,10 @@ class EmergencyLightDetector:
             bbox = [x, y, x + w, y + h]
             lane = lane_mapper.assign_lane(bbox)
 
-            if lane:
+            # FIX: Only flag a lane if a real tracked vehicle is currently in it.
+            # This prevents traffic lights, building reflections, and roadway
+            # markings from triggering an emergency alert when no vehicle exists.
+            if lane and lane in occupied_lanes:
                 detected_blobs.append({
                     "lane": lane,
                     "bbox": bbox
